@@ -22,6 +22,12 @@ export const config = {
   allowDemo: (process.env.ALLOW_DEMO ?? 'true') === 'true',
   maxPhotoBytes: Number(process.env.MAX_PHOTO_MB || 8) * 1024 * 1024,
   photoUrlTtlSec: 60 * 60,
+  // Sign in with Apple: accepted "aud" values (the iOS bundle ID).
+  appleAudiences: (process.env.APPLE_AUDIENCES || 'com.tunnaduong.seeli').split(',').map((s) => s.trim()).filter(Boolean),
+  // Google Sign-In: OAuth client IDs (iOS client) whose ID tokens we accept. Empty = Google login disabled.
+  googleClientIds: (process.env.GOOGLE_CLIENT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
+  // Auth attempts per IP per minute.
+  authRateLimit: Number(process.env.AUTH_RATE_LIMIT || 10),
   // Admin page password (/admin). Empty = admin page disabled.
   adminPassword: process.env.ADMIN_PASSWORD || '',
   adminSessionHours: 12,

@@ -5,8 +5,10 @@ export const iso = (ms) => (ms == null ? null : new Date(ms).toISOString().repla
 
 export const publicUser = (u) => ({ id: u.id, name: u.name, handle: u.handle });
 
-export const me = (u) => ({
+export const me = (u, providers = []) => ({
   ...publicUser(u),
+  hasPassword: !!u.password_hash,
+  providers,
   email: u.email,
   bio: u.bio,
   inviteCode: u.invite_code,

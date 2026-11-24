@@ -11,6 +11,7 @@ export function hashPassword(password) {
 }
 
 export function verifyPassword(password, stored) {
+  if (!stored) return false; // social-only account: no password set
   const [, saltB64, hashB64] = String(stored).split('$');
   if (!saltB64 || !hashB64) return false;
   const expected = Buffer.from(hashB64, 'base64url');

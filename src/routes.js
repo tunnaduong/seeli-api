@@ -8,6 +8,27 @@ import {
   checkPhotoSignature, newInviteCode, newId,
 } from './auth.js';
 import { me, publicUser, myMoment, feedMoment, iso } from './serialize.js';
+import { verifyIdToken, TokenError } from './oidc.js';
+
+/** Profile JSON including which sign-in providers are linked. */
+const meOf = (u) => me(u, all('SELECT provider FROM identities WHERE user_id = ? ORDER BY provider', u.id).map((r) => r.provider));
+
+/** Turns a name/email into an available handle like "phat", "phat2"… */
+function suggestHandle(...seeds) {
+  for (const seed of seeds) {
+    const base = String(seed || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd')
+      .toLowerCase().replace(/[^a-z0-9._-]+/g, '').replace(/^[._-]+|[._-]+$/g, '').slice(0, 24);
+    if (base.length < 2) continue;
+    for (let i = 0; i < 50; i++) {
+      const h = i === 0 ? base : `${base}${i + 1}`;
+      if (!one('SELECT 1 FROM users WHERE handle = ?', h)) return h;
+    }
+  }
+  for (;;) {
+    const h = `seeli${Math.floor(1000 + Math.random() * 900000)}`;
+    if (!one('SELECT 1 FROM users WHERE handle = ?', h)) return h;
+  }
+}
 
 const HANDLE_RE = /^[a-z0-9._-]{2,30}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -19,7 +40,7 @@ const bad = (reply, error, code = 400) => reply.code(code).send({ error });
 
 /** Tiny in-memory limiter for auth endpoints (per IP). */
 const hits = new Map();
-function limited(ip, max = 10, windowMs = 60_000) {
+function limited(ip, max = config.authRateLimit, windowMs = 60_000) {
   const now = Date.now();
   const list = (hits.get(ip) || []).filter((t) => now - t < windowMs);
   list.push(now);
@@ -75,7 +96,7 @@ export default async function routes(app) {
       user.id, user.name, user.handle, user.email, user.password_hash, user.bio,
       user.invite_code, user.token_version, user.created_at,
     );
-    return reply.code(201).send({ token: issueToken(user), user: me(user) });
+    return reply.code(201).send({ token: issueToken(user), user: meOf(user) });
   });
 
   app.post('/auth/login', async (req, reply) => {
@@ -85,7 +106,58 @@ export default async function routes(app) {
     const user = one('SELECT * FROM users WHERE email = ?', email);
     if (!user || !verifyPassword(password, user.password_hash)) return bad(reply, 'invalid_credentials', 401);
     if (user.suspended_at) return bad(reply, 'account_suspended', 403);
-    return { token: issueToken(user), user: me(user) };
+    return { token: issueToken(user), user: meOf(user) };
+  });
+
+  /**
+   * Sign in with Apple / Google. Body: { idToken, nonce?, name? }.
+   * Existing link → sign in. Verified email matching an account → link it.
+   * Otherwise a new account is created (handle suggested, editable later).
+   */
+  app.post('/auth/:provider', async (req, reply) => {
+    const provider = req.params.provider;
+    if (provider !== 'apple' && provider !== 'google') return bad(reply, 'not_found', 404);
+    if (limited(req.ip)) return bad(reply, 'too_many_requests', 429);
+    let claims;
+    try {
+      claims = await verifyIdToken(provider, req.body?.idToken, { nonce: req.body?.nonce || undefined });
+    } catch (e) {
+      if (e instanceof TokenError) return bad(reply, e.message === 'provider_not_configured' ? 'provider_disabled' : 'invalid_token', 401);
+      req.log.error(e);
+      return bad(reply, 'provider_unreachable', 502);
+    }
+
+    const linked = one('SELECT u.* FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = ? AND i.subject = ?', provider, claims.sub);
+    let user = linked;
+    let isNew = false;
+    if (!user && claims.email && claims.emailVerified) {
+      user = one('SELECT * FROM users WHERE email = ?', claims.email);
+    }
+    if (user?.suspended_at) return bad(reply, 'account_suspended', 403);
+
+    if (!user) {
+      const name = str(req.body?.name, 40) || str(claims.name, 40) || (claims.email ? claims.email.split('@')[0] : '') || 'SEELI';
+      const email = claims.email && !one('SELECT 1 FROM users WHERE email = ?', claims.email)
+        ? claims.email
+        : `${provider}.${claims.sub.replace(/[^a-zA-Z0-9]/g, '').slice(-24)}@users.seeli.invalid`;
+      user = {
+        id: newId(), name, handle: suggestHandle(name, claims.email?.split('@')[0]), email, password_hash: '',
+        bio: '', invite_code: uniqueInviteCode(), token_version: 0, created_at: Date.now(),
+      };
+      run(
+        `INSERT INTO users (id, name, handle, email, password_hash, bio, invite_code, token_version, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        user.id, user.name, user.handle, user.email, user.password_hash, user.bio,
+        user.invite_code, user.token_version, user.created_at,
+      );
+      isNew = true;
+    }
+    if (!linked) {
+      run('INSERT OR IGNORE INTO identities (provider, subject, user_id, email, created_at) VALUES (?, ?, ?, ?, ?)',
+        provider, claims.sub, user.id, claims.email, Date.now());
+    }
+    user = one('SELECT * FROM users WHERE id = ?', user.id);
+    return reply.code(isNew ? 201 : 200).send({ token: issueToken(user), user: meOf(user), isNew });
   });
 
   // Everything below needs a signed-in user (except /photos, which uses signed URLs).
@@ -94,14 +166,17 @@ export default async function routes(app) {
 
     // ---------- Me ----------
 
-    priv.get('/me', async (req) => me(req.user));
+    priv.get('/me', async (req) => meOf(req.user));
 
     priv.patch('/me', async (req, reply) => {
       const name = req.body?.name !== undefined ? str(req.body.name, 40) : req.user.name;
       const bio = req.body?.bio !== undefined ? str(req.body.bio, 300) : req.user.bio;
+      const handle = req.body?.handle !== undefined ? str(req.body.handle, 30).toLowerCase().replace(/^@/, '') : req.user.handle;
       if (!name) return bad(reply, 'name_required');
-      run('UPDATE users SET name = ?, bio = ? WHERE id = ?', name, bio, req.user.id);
-      return me(one('SELECT * FROM users WHERE id = ?', req.user.id));
+      if (!HANDLE_RE.test(handle)) return bad(reply, 'invalid_handle');
+      if (handle !== req.user.handle && one('SELECT 1 FROM users WHERE handle = ?', handle)) return bad(reply, 'handle_taken', 409);
+      run('UPDATE users SET name = ?, bio = ?, handle = ? WHERE id = ?', name, bio, handle, req.user.id);
+      return meOf(one('SELECT * FROM users WHERE id = ?', req.user.id));
     });
 
     /** Sign out everywhere. */
@@ -117,7 +192,7 @@ export default async function routes(app) {
 
     priv.post('/me/invite/rotate', async (req) => {
       run('UPDATE users SET invite_code = ? WHERE id = ?', uniqueInviteCode(), req.user.id);
-      return me(one('SELECT * FROM users WHERE id = ?', req.user.id));
+      return meOf(one('SELECT * FROM users WHERE id = ?', req.user.id));
     });
 
     // ---------- Friends (QR invite codes) ----------

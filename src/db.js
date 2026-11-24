@@ -72,6 +72,15 @@ if (!hasColumn('users', 'suspended_at')) db.exec('ALTER TABLE users ADD COLUMN s
 if (!hasColumn('reports', 'status')) db.exec("ALTER TABLE reports ADD COLUMN status TEXT NOT NULL DEFAULT 'open'");
 if (!hasColumn('reports', 'resolved_at')) db.exec('ALTER TABLE reports ADD COLUMN resolved_at INTEGER');
 db.exec(`
+CREATE TABLE IF NOT EXISTS identities (
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  email TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (provider, subject)
+);
+CREATE INDEX IF NOT EXISTS identities_user ON identities(user_id);
 CREATE TABLE IF NOT EXISTS admin_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   action TEXT NOT NULL,
