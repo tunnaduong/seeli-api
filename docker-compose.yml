@@ -1,0 +1,17 @@
+services:
+  seeli-api:
+    build: .
+    container_name: seeli-api
+    restart: unless-stopped
+    env_file: .env
+    # Only reachable from the server itself; aaPanel's nginx proxies the public domain to it.
+    ports:
+      - "127.0.0.1:${HOST_PORT:-8790}:8790"
+    volumes:
+      # Database + photos. Back up this folder.
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

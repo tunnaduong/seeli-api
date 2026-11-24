@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>SEELI Admin</title>
+<style>
+:root {
+  --bg: #F6F5F0; --card: #ECEBE4; --surface: #FFFFFE; --green: #5F6B4E; --green-pale: #DCE4DA;
+  --ink: #2F302B; --muted: #8B8C84; --line: #E2E1DA; --red: #B0574A; --red-pale: #F3E1DD; --sun: #F5D38A;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, input, select { font: inherit; }
+.wrap { width: min(1100px, 100% - 32px); margin-inline: auto; }
+header { border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 5; }
+header .wrap { display: flex; align-items: center; gap: 24px; height: 60px; }
+.brand { font-weight: 700; letter-spacing: .14em; display: flex; align-items: center; gap: 8px; }
+.brand small { font-weight: 500; letter-spacing: .05em; color: var(--muted); }
+nav { display: flex; gap: 4px; flex: 1; }
+nav button { border: 0; background: none; padding: 8px 14px; border-radius: 10px; cursor: pointer; color: var(--muted); font-weight: 500; }
+nav button.active { background: var(--card); color: var(--ink); }
+nav .badge { background: var(--red); color: #fff; border-radius: 999px; font-size: 11px; padding: 1px 7px; margin-left: 6px; }
+.btn { border: 1px solid var(--line); background: var(--surface); padding: 7px 12px; border-radius: 10px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+.btn:hover { background: var(--card); }
+.btn.primary { background: var(--green); border-color: var(--green); color: #fff; }
+.btn.danger { color: var(--red); }
+.btn.danger:hover { background: var(--red-pale); }
+.btn:disabled { opacity: .5; cursor: default; }
+main { padding: 28px 0 60px; }
+h1 { font-size: 22px; margin: 0 0 18px; font-weight: 600; }
+h2 { font-size: 16px; margin: 28px 0 12px; font-weight: 600; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+.stat .v { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .l { color: var(--muted); font-size: 13px; }
+.stat.warn { border-color: var(--red); background: var(--red-pale); }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.bar { height: 10px; background: var(--card); border-radius: 999px; overflow: hidden; margin: 10px 0 6px; }
+.bar > div { height: 100%; background: var(--green); }
+.bar.hot > div { background: var(--red); }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { font-size: 12px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .05em; background: #FAF9F5; }
+tr:last-child td { border-bottom: 0; }
+td.num { font-variant-numeric: tabular-nums; text-align: right; }
+.actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--card); color: var(--muted); }
+.tag.red { background: var(--red-pale); color: var(--red); }
+.tag.green { background: var(--green-pale); color: var(--green); }
+.toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.toolbar input { flex: 1; min-width: 200px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.seg { display: flex; background: var(--card); border-radius: 10px; padding: 3px; }
+.seg button { border: 0; background: none; padding: 6px 12px; border-radius: 8px; cursor: pointer; color: var(--muted); font-size: 13px; }
+.seg button.active { background: var(--surface); color: var(--ink); }
+.empty { padding: 40px; text-align: center; color: var(--muted); }
+.log li { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; display: flex; justify-content: space-between; gap: 12px; }
+.log { list-style: none; margin: 0; padding: 0 16px; }
+.note { background: var(--green-pale); border-radius: 12px; padding: 12px 16px; font-size: 13px; color: var(--green); margin-top: 24px; }
+#login { min-height: 100vh; display: grid; place-items: center; }
+#login form { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 32px; width: min(360px, 100% - 32px); }
+#login h1 { text-align: center; letter-spacing: .14em; margin-bottom: 6px; }
+#login p { text-align: center; margin: 0 0 22px; }
+#login input { width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 12px; background: var(--bg); }
+#login button { width: 100%; padding: 12px; }
+.err { color: var(--red); font-size: 13px; min-height: 20px; margin-bottom: 8px; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 12px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+.scroll { overflow-x: auto; }
+@media (max-width: 700px) {
+  header .wrap { gap: 10px; }
+  .brand small { display: none; }
+  th.hide-sm, td.hide-sm { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div id="login" hidden>
+  <form id="loginForm">
+    <h1>SEELI</h1>
+    <p class="muted small">Trang quản trị</p>
+    <input type="password" id="pw" placeholder="Mật khẩu quản trị" autocomplete="current-password" required>
+    <div class="err" id="loginErr"></div>
+    <button class="btn primary" type="submit">Đăng nhập</button>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <div class="wrap">
+      <div class="brand">SEELI <small>Admin</small></div>
+      <nav>
+        <button data-tab="overview" class="active">Tổng quan</button>
+        <button data-tab="users">Người dùng</button>
+        <button data-tab="reports">Báo cáo<span class="badge" id="reportBadge" hidden></span></button>
+      </nav>
+      <button class="btn" id="logout">Đăng xuất</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section id="tab-overview">
+      <h1>Tổng quan</h1>
+      <div class="grid" id="stats"></div>
+      <h2>Dung lượng ổ đĩa</h2>
+      <div class="panel" style="padding:16px" id="disk"></div>
+      <h2>Thao tác gần đây</h2>
+      <div class="panel"><ul class="log" id="log"></ul></div>
+      <div class="note">Trang này chỉ hiện tài khoản, báo cáo và số liệu. Ảnh, lời ghi chú, địa điểm, bình luận và ghi chú riêng của người dùng không bao giờ hiện ở đây.</div>
+    </section>
+
+    <section id="tab-users" hidden>
+      <h1>Người dùng <span class="muted small" id="userTotal"></span></h1>
+      <div class="toolbar">
+        <input id="q" type="search" placeholder="Tìm theo tên, @tên người dùng hoặc email">
+      </div>
+      <div class="panel scroll">
+        <table>
+          <thead><tr><th>Người dùng</th><th class="hide-sm">Email</th><th class="hide-sm">Tham gia</th><th class="num">Ảnh</th><th class="num">Bạn</th><th></th></tr></thead>
+          <tbody id="users"></tbody>
+        </table>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;justify-content:center">
+        <button class="btn" id="prev">← Trước</button>
+        <button class="btn" id="next">Sau →</button>
+      </div>
+    </section>
+
+    <section id="tab-reports" hidden>
+      <h1>Báo cáo</h1>
+      <div class="toolbar">
+        <div class="seg" id="reportFilter">
+          <button data-s="open" class="active">Đang mở</button>
+          <button data-s="resolved">Đã xử lý</button>
+          <button data-s="dismissed">Đã bỏ qua</button>
+          <button data-s="">Tất cả</button>
+        </div>
+      </div>
+      <div class="panel scroll">
+        <table>
+          <thead><tr><th>Bị báo cáo</th><th class="hide-sm">Người báo cáo</th><th class="hide-sm">Thời gian</th><th>Trạng thái</th><th></th></tr></thead>
+          <tbody id="reports"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '/v1/admin';
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtDate = (s) => s ? new Date(s).toLocaleString('vi-VN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+const fmtBytes = (b) => b == null ? '—' : b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.round(b / 1e3) + ' KB';
+const ACTIONS = { login: 'Đăng nhập trang quản trị', suspend: 'Khoá tài khoản', unsuspend: 'Mở khoá tài khoản', signout: 'Đăng xuất mọi thiết bị', delete: 'Xoá tài khoản', report_resolved: 'Đánh dấu báo cáo đã xử lý', report_dismissed: 'Bỏ qua báo cáo', report_open: 'Mở lại báo cáo' };
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+async function api(path, { method = 'GET', body } = {}) {
+  const res = await fetch(API + path, {
+    method, credentials: 'same-origin',
+    headers: { 'X-Seeli-Admin': '1', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'error');
+  return data;
+}
+
+function showLogin() { $('#app').hidden = true; $('#login').hidden = false; $('#pw').focus(); }
+function showApp() { $('#login').hidden = true; $('#app').hidden = false; loadOverview(); }
+
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('#loginErr').textContent = '';
+  try {
+    await api('/login', { method: 'POST', body: { password: $('#pw').value } });
+    $('#pw').value = '';
+    showApp();
+  } catch (err) {
+    $('#loginErr').textContent = err.message === 'too_many_requests'
+      ? 'Thử sai quá nhiều lần. Hãy đợi 15 phút.'
+      : err.message === 'admin_disabled' ? 'Chưa đặt ADMIN_PASSWORD trên server.' : 'Mật khẩu không đúng.';
+  }
+});
+
+$('#logout').addEventListener('click', async () => { await api('/logout', { method: 'POST' }).catch(() => {}); showLogin(); });
+
+document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
+  for (const t of ['overview', 'users', 'reports']) $('#tab-' + t).hidden = t !== b.dataset.tab;
+  ({ overview: loadOverview, users: loadUsers, reports: loadReports })[b.dataset.tab]();
+}));
+
+// ---------- Overview ----------
+async function loadOverview() {
+  const s = await api('/stats');
+  const cards = [
+    ['Người dùng', s.users], ['Mới trong 7 ngày', s.newUsers7d], ['Ảnh đã chụp', s.moments], ['Ảnh trong 7 ngày', s.moments7d],
+    ['Đang ngủ yên', s.sleeping], ['Đã gặp lại', s.reunited], ['Kết nối bạn bè', s.friendships], ['Góc nhìn đã gửi', s.perspectives],
+    ['Báo cáo đang mở', s.openReports, s.openReports > 0], ['Tài khoản bị khoá', s.suspended],
+  ];
+  $('#stats').innerHTML = cards.map(([l, v, warn]) => `<div class="stat${warn ? ' warn' : ''}"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join('');
+  setBadge(s.openReports);
+
+  const used = s.diskTotalBytes - s.diskFreeBytes;
+  const pct = s.diskTotalBytes ? Math.round((used / s.diskTotalBytes) * 100) : 0;
+  $('#disk').innerHTML = `
+    <div><b>${fmtBytes(s.diskFreeBytes)}</b> còn trống / ${fmtBytes(s.diskTotalBytes)} <span class="muted small">(đã dùng ${pct}%)</span></div>
+    <div class="bar${pct >= 90 ? ' hot' : ''}"><div style="width:${pct}%"></div></div>
+    <div class="muted small">Ảnh SEELI: ${esc(s.photoFiles)} tệp, ${fmtBytes(s.photoBytes)}.
+      Chế độ demo: ${s.allowDemo ? '<span class="tag red">đang bật</span> — tắt trước khi ra mắt (ALLOW_DEMO=false)' : '<span class="tag green">đã tắt</span>'}</div>`;
+
+  $('#log').innerHTML = s.recentActions.length
+    ? s.recentActions.map((a) => `<li><span>${esc(ACTIONS[a.action] || a.action)} ${a.target ? `<b>${esc(a.target)}</b>` : ''}</span><span class="muted">${fmtDate(a.created_at)}</span></li>`).join('')
+    : '<li class="muted">Chưa có thao tác nào.</li>';
+}
+
+function setBadge(n) { const b = $('#reportBadge'); b.hidden = !n; b.textContent = n; }
+
+// ---------- Users ----------
+let offset = 0;
+const PAGE = 50;
+let searchTimer;
+$('#q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { offset = 0; loadUsers(); }, 250); });
+$('#prev').addEventListener('click', () => { offset = Math.max(0, offset - PAGE); loadUsers(); });
+$('#next').addEventListener('click', () => { offset += PAGE; loadUsers(); });
+
+async function loadUsers() {
+  const q = encodeURIComponent($('#q').value.trim());
+  const { total, users } = await api(`/users?q=${q}&limit=${PAGE}&offset=${offset}`);
+  $('#userTotal').textContent = `(${total})`;
+  $('#prev').disabled = offset === 0;
+  $('#next').disabled = offset + PAGE >= total;
+  $('#users').innerHTML = users.length ? users.map((u) => `
+    <tr data-id="${esc(u.id)}" data-handle="${esc(u.handle)}">
+      <td><b>${esc(u.name)}</b> <span class="muted">@${esc(u.handle)}</span>
+        ${u.suspendedAt ? '<span class="tag red">đã khoá</span>' : ''}
+        ${u.openReports ? `<span class="tag red">${esc(u.openReports)} báo cáo</span>` : ''}</td>
+      <td class="hide-sm muted">${esc(u.email)}</td>
+      <td class="hide-sm muted small">${fmtDate(u.createdAt)}</td>
+      <td class="num">${esc(u.moments)}</td>
+      <td class="num">${esc(u.friends)}</td>
+      <td><div class="actions">
+        <button class="btn" data-act="${u.suspendedAt ? 'unsuspend' : 'suspend'}">${u.suspendedAt ? 'Mở khoá' : 'Khoá'}</button>
+        <button class="btn" data-act="signout">Đăng xuất</button>
+        <button class="btn danger" data-act="delete">Xoá</button>
+      </div></td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">Không có người dùng nào.</td></tr>';
+}
+
+$('#users').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const row = btn.closest('tr');
+  const { id, handle } = row.dataset;
+  const act = btn.dataset.act;
+  try {
+    if (act === 'suspend') {
+      if (!confirm(`Khoá @${handle}? Người này sẽ bị đăng xuất và không thể đăng nhập cho tới khi được mở khoá.`)) return;
+      await api(`/users/${id}/suspend`, { method: 'POST', body: { suspended: true } }); toast(`Đã khoá @${handle}`);
+    } else if (act === 'unsuspend') {
+      await api(`/users/${id}/suspend`, { method: 'POST', body: { suspended: false } }); toast(`Đã mở khoá @${handle}`);
+    } else if (act === 'signout') {
+      if (!confirm(`Đăng xuất @${handle} khỏi mọi thiết bị?`)) return;
+      await api(`/users/${id}/signout`, { method: 'POST' }); toast('Đã đăng xuất mọi thiết bị');
+    } else if (act === 'delete') {
+      const typed = prompt(`Xoá vĩnh viễn @${handle}, gồm toàn bộ ảnh, kết nối và bình luận. Không thể khôi phục.\n\nGõ "${handle}" để xác nhận:`);
+      if (typed !== handle) { if (typed !== null) toast('Tên người dùng không khớp — chưa xoá.'); return; }
+      await api(`/users/${id}`, { method: 'DELETE', body: { confirmHandle: handle } }); toast(`Đã xoá @${handle}`);
+    }
+    loadUsers();
+  } catch (err) { if (err.message !== 'unauthorized') toast('Lỗi: ' + err.message); }
+});
+
+// ---------- Reports ----------
+let reportStatus = 'open';
+document.querySelectorAll('#reportFilter button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('#reportFilter button').forEach((x) => x.classList.toggle('active', x === b));
+  reportStatus = b.dataset.s; loadReports();
+}));
+
+const STATUS = { open: '<span class="tag red">đang mở</span>', resolved: '<span class="tag green">đã xử lý</span>', dismissed: '<span class="tag">đã bỏ qua</span>' };
+
+async function loadReports() {
+  const rows = await api(`/reports${reportStatus ? `?status=${reportStatus}` : ''}`);
+  if (reportStatus === 'open') setBadge(rows.length);
+  $('#reports').innerHTML = rows.length ? rows.map((r) => `
+    <tr data-id="${esc(r.id)}" data-target="${esc(r.target?.id || '')}" data-handle="${esc(r.target?.handle || '')}">
+      <td>${r.target ? `<b>${esc(r.target.name)}</b> <span class="muted">@${esc(r.target.handle)}</span>
+          ${r.target.suspended ? '<span class="tag red">đã khoá</span>' : ''}
+          <div class="muted small">${esc(r.targetReportCount)} báo cáo tổng cộng</div>` : '<span class="muted">Tài khoản đã bị xoá</span>'}</td>
+      <td class="hide-sm">${r.reporter ? `${esc(r.reporter.name)} <span class="muted">@${esc(r.reporter.handle)}</span>` : '<span class="muted">—</span>'}</td>
+      <td class="hide-sm muted small">${fmtDate(r.createdAt)}</td>
+      <td>${STATUS[r.status] || esc(r.status)}</td>
+      <td><div class="actions">
+        ${r.status === 'open' ? `
+          <button class="btn" data-act="resolved">Đã xử lý</button>
+          <button class="btn" data-act="dismissed">Bỏ qua</button>
+          ${r.target && !r.target.suspended ? '<button class="btn danger" data-act="suspend">Khoá người này</button>' : ''}`
+          : '<button class="btn" data-act="open">Mở lại</button>'}
+      </div></td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">Không có báo cáo nào.</td></tr>';
+}
+
+$('#reports').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const { id, target, handle } = btn.closest('tr').dataset;
+  const act = btn.dataset.act;
+  try {
+    if (act === 'suspend') {
+      if (!confirm(`Khoá @${handle} và đánh dấu báo cáo đã xử lý?`)) return;
+      await api(`/users/${target}/suspend`, { method: 'POST', body: { suspended: true } });
+      await api(`/reports/${id}`, { method: 'POST', body: { status: 'resolved' } });
+      toast(`Đã khoá @${handle}`);
+    } else {
+      await api(`/reports/${id}`, { method: 'POST', body: { status: act } });
+      toast('Đã cập nhật báo cáo');
+    }
+    loadReports();
+  } catch (err) { if (err.message !== 'unauthorized') toast('Lỗi: ' + err.message); }
+});
+
+api('/session').then((s) => (s.ok ? showApp() : showLogin())).catch(() => showLogin());
+</script>
+</body>
+</html>
