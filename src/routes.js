@@ -9,6 +9,7 @@ import {
 } from './auth.js';
 import { me, publicUser, myMoment, feedMoment, iso } from './serialize.js';
 import { verifyIdToken, TokenError } from './oidc.js';
+import { appleConfigured, exchangeCode, revokeToken } from './apple.js';
 
 /** Profile JSON including which sign-in providers are linked. */
 const meOf = (u) => me(u, all('SELECT provider FROM identities WHERE user_id = ? ORDER BY provider', u.id).map((r) => r.provider));
@@ -156,6 +157,11 @@ export default async function routes(app) {
       run('INSERT OR IGNORE INTO identities (provider, subject, user_id, email, created_at) VALUES (?, ?, ?, ?, ?)',
         provider, claims.sub, user.id, claims.email, Date.now());
     }
+    // Keep Apple's refresh token so access can be revoked when the account is deleted.
+    if (provider === 'apple' && req.body?.authorizationCode) {
+      const refresh = await exchangeCode(String(req.body.authorizationCode)).catch((e) => { req.log.warn(e); return null; });
+      if (refresh) run('UPDATE identities SET refresh_token = ? WHERE provider = ? AND subject = ?', refresh, provider, claims.sub);
+    }
     user = one('SELECT * FROM users WHERE id = ?', user.id);
     return reply.code(isNew ? 201 : 200).send({ token: issueToken(user), user: meOf(user), isNew });
   });
@@ -185,9 +191,17 @@ export default async function routes(app) {
       return { ok: true };
     });
 
-    priv.delete('/me', async (req) => {
-      await deleteUserCompletely(req.user.id);
-      return { ok: true };
+    /**
+     * Delete account. Linked Apple IDs are revoked first (Guideline 5.1.1(v)).
+     * If we hold no Apple token, the app re-authenticates and sends `appleAuthorizationCode`.
+     */
+    priv.delete('/me', async (req, reply) => {
+      const appleCode = req.body?.appleAuthorizationCode ? String(req.body.appleAuthorizationCode) : null;
+      const needsCode = appleConfigured() && !appleCode &&
+        !!one("SELECT 1 FROM identities WHERE user_id = ? AND provider = 'apple' AND refresh_token IS NULL", req.user.id);
+      if (needsCode) return bad(reply, 'apple_reauth_required', 409);
+      const result = await deleteUserCompletely(req.user.id, { appleCode, log: req.log });
+      return { ok: true, ...result };
     });
 
     priv.post('/me/invite/rotate', async (req) => {
@@ -402,9 +416,21 @@ export default async function routes(app) {
 }
 
 /** Removes the account, every row that belongs to it (FK cascade) and its photos. */
-export async function deleteUserCompletely(userId) {
+export async function deleteUserCompletely(userId, { appleCode = null, log = null } = {}) {
+  let appleRevoked = null;
+  for (const idn of all("SELECT * FROM identities WHERE user_id = ? AND provider = 'apple'", userId)) {
+    try {
+      const token = idn.refresh_token || (appleCode ? await exchangeCode(appleCode) : null);
+      appleRevoked = token ? await revokeToken(token) : false;
+    } catch (e) {
+      appleRevoked = false;
+      log?.warn(e);
+    }
+    if (!appleRevoked) log?.warn({ userId }, 'apple_revoke_failed');
+  }
   run('DELETE FROM users WHERE id = ?', userId);
   await rm(join(config.photoDir, userId), { recursive: true, force: true });
+  return appleRevoked === null ? {} : { appleRevoked };
 }
 
 function canComment(userId, m) {

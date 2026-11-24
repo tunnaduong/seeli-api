@@ -24,6 +24,10 @@ export const config = {
   photoUrlTtlSec: 60 * 60,
   // Sign in with Apple: accepted "aud" values (the iOS bundle ID).
   appleAudiences: (process.env.APPLE_AUDIENCES || 'com.tunnaduong.seeli').split(',').map((s) => s.trim()).filter(Boolean),
+  // Sign in with Apple key (.p8) for token exchange + revocation on account deletion.
+  appleTeamId: process.env.APPLE_TEAM_ID || '',
+  appleKeyId: process.env.APPLE_KEY_ID || '',
+  appleKeyPath: process.env.APPLE_KEY_PATH || '',
   // Google Sign-In: OAuth client IDs (iOS client) whose ID tokens we accept. Empty = Google login disabled.
   googleClientIds: (process.env.GOOGLE_CLIENT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
   // Auth attempts per IP per minute.

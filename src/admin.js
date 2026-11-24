@@ -160,7 +160,7 @@ export default async function adminRoutes(app) {
       const u = one('SELECT * FROM users WHERE id = ?', req.params.id);
       if (!u) return reply.code(404).send({ error: 'not_found' });
       if (req.body?.confirmHandle !== u.handle) return reply.code(400).send({ error: 'confirm_handle' });
-      await deleteUserCompletely(u.id);
+      await deleteUserCompletely(u.id, { log: req.log });
       log(req, 'delete', `@${u.handle}`);
       return { ok: true };
     });

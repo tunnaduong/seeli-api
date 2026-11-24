@@ -91,6 +91,8 @@ CREATE TABLE IF NOT EXISTS admin_log (
 );
 `);
 
+if (!hasColumn('identities', 'refresh_token')) db.exec('ALTER TABLE identities ADD COLUMN refresh_token TEXT');
+
 export const one = (sql, ...p) => db.prepare(sql).get(...p);
 export const all = (sql, ...p) => db.prepare(sql).all(...p);
 export const run = (sql, ...p) => db.prepare(sql).run(...p);

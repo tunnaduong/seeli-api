@@ -24,7 +24,9 @@ if ! grep -qE '^ADMIN_PASSWORD=.+' .env; then
 fi
 chmod 600 .env
 
-mkdir -p data
+mkdir -p data secrets
+chmod 700 secrets
+chown -R 1000:1000 secrets 2>/dev/null || sudo chown -R 1000:1000 secrets
 # The container runs as the "node" user (uid 1000).
 chown -R 1000:1000 data 2>/dev/null || sudo chown -R 1000:1000 data
 

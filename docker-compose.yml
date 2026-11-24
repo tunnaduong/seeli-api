@@ -10,6 +10,8 @@ services:
     volumes:
       # Database + photos. Back up this folder.
       - ./data:/data
+      # Private keys (e.g. Sign in with Apple AuthKey.p8). Never commit this folder.
+      - ./secrets:/secrets:ro
     logging:
       driver: json-file
       options:
