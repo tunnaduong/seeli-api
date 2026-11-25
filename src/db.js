@@ -93,6 +93,18 @@ CREATE TABLE IF NOT EXISTS admin_log (
 
 if (!hasColumn('identities', 'refresh_token')) db.exec('ALTER TABLE identities ADD COLUMN refresh_token TEXT');
 
+// Push notification targets. env = which APNs gateway issued the token.
+db.exec(`
+CREATE TABLE IF NOT EXISTS device_tokens (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  env TEXT NOT NULL DEFAULT 'production',
+  lang TEXT NOT NULL DEFAULT 'vi',
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS device_tokens_user ON device_tokens(user_id);
+`);
+
 // A friend may open someone else's photo exactly once.
 db.exec(`
 CREATE TABLE IF NOT EXISTS photo_views (

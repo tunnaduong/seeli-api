@@ -28,6 +28,11 @@ export const config = {
   appleTeamId: process.env.APPLE_TEAM_ID || '',
   appleKeyId: process.env.APPLE_KEY_ID || '',
   appleKeyPath: process.env.APPLE_KEY_PATH || '',
+  // Push notifications (APNs). A .p8 key with "Apple Push Notifications service" enabled.
+  // Empty key ID = pushes are skipped. Team ID falls back to APPLE_TEAM_ID.
+  apnsKeyId: process.env.APNS_KEY_ID || '',
+  apnsKeyPath: process.env.APNS_KEY_PATH || '',
+  apnsTopic: process.env.APNS_TOPIC || 'com.tunnaduong.seeli',
   // Google Sign-In: OAuth client IDs (iOS client) whose ID tokens we accept. Empty = Google login disabled.
   googleClientIds: (process.env.GOOGLE_CLIENT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
   // Auth attempts per IP per minute.

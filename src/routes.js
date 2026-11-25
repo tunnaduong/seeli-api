@@ -10,6 +10,7 @@ import {
 import { me, publicUser, myMoment, feedMoment, iso } from './serialize.js';
 import { verifyIdToken, TokenError } from './oidc.js';
 import { appleConfigured, exchangeCode, revokeToken } from './apple.js';
+import { pushToUsers } from './apns.js';
 
 /** Profile JSON including which sign-in providers are linked. */
 const meOf = (u) => me(u, all('SELECT provider FROM identities WHERE user_id = ? ORDER BY provider', u.id).map((r) => r.provider));
@@ -188,8 +189,27 @@ export default async function routes(app) {
     });
 
     /** Sign out everywhere. */
+    /** Registers this device for push. env: "sandbox" (debug builds) or "production". */
+    priv.put('/me/device', async (req, reply) => {
+      const token = String(req.body?.token || '');
+      if (!/^[0-9a-f]{64,200}$/i.test(token)) return bad(reply, 'invalid_token');
+      const env = req.body?.env === 'sandbox' ? 'sandbox' : 'production';
+      const lang = req.body?.lang === 'ja' ? 'ja' : 'vi';
+      run(`INSERT INTO device_tokens (token, user_id, env, lang, updated_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (token) DO UPDATE SET user_id = excluded.user_id, env = excluded.env,
+             lang = excluded.lang, updated_at = excluded.updated_at`,
+      token.toLowerCase(), req.user.id, env, lang, Date.now());
+      return { ok: true };
+    });
+
+    priv.delete('/me/device', async (req) => {
+      run('DELETE FROM device_tokens WHERE token = ? AND user_id = ?', String(req.body?.token || '').toLowerCase(), req.user.id);
+      return { ok: true };
+    });
+
     priv.post('/auth/logout', async (req) => {
       run('UPDATE users SET token_version = token_version + 1 WHERE id = ?', req.user.id);
+      run('DELETE FROM device_tokens WHERE user_id = ?', req.user.id);
       return { ok: true };
     });
 
@@ -319,6 +339,7 @@ export default async function routes(app) {
         id, req.user.id, str(fields.note, 80), str(fields.placeName, 120) || null, audience, rel,
         createdAt, Math.round(revealTime(createdAt, fields.demo === 'true')),
       );
+      if (audience === 'circle') notifyCircle(req.user, id, req.log);
       return reply.code(201).send(myMoment(one('SELECT * FROM moments WHERE id = ?', id), baseUrl(req)));
     });
 
@@ -438,6 +459,25 @@ export default async function routes(app) {
     reply.header('Cache-Control', once ? 'no-store' : 'private, max-age=3600');
     return reply.type('image/jpeg').send(createReadStream(join(config.photoDir, m.photo_path)));
   });
+}
+
+const FRIEND_POST_TEXT = {
+  vi: (name) => ({ title: name, body: 'vừa chia sẻ một khoảnh khắc. Ảnh chỉ hiện một lần thôi.' }),
+  ja: (name) => ({ title: name, body: 'さんが瞬間をシェアしました。写真は一度だけ見られます。' }),
+};
+
+/** Tells friends (not blocked either way) that someone shared to their circle. Fire and forget. */
+function notifyCircle(author, momentId, log) {
+  const friends = all(
+    `SELECT f.friend_id AS id FROM friendships f
+      WHERE f.user_id = ?
+        AND EXISTS (SELECT 1 FROM friendships r WHERE r.user_id = f.friend_id AND r.friend_id = f.user_id)
+        AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.user_id = f.friend_id AND b.blocked_id = ?)
+                                                  OR (b.user_id = ? AND b.blocked_id = f.friend_id))`,
+    author.id, author.id, author.id,
+  ).map((r) => r.id);
+  pushToUsers(friends, (lang) => (FRIEND_POST_TEXT[lang] || FRIEND_POST_TEXT.vi)(author.name),
+    { type: 'friend_post', momentId }, log).catch(() => {});
 }
 
 /** Removes the account, every row that belongs to it (FK cascade) and its photos. */
