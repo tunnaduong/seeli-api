@@ -48,5 +48,7 @@ export const feedMoment = (m) => ({
   photoUrl: null,
   viewedAt: iso(m.viewed_at),
   myComment: m.my_comment ?? null,
+  myCommentReply: m.my_comment_reply ?? null,
+  myCommentRepliedAt: iso(m.my_comment_replied_at),
   scene: parseInt(m.id.slice(0, 6), 16) % 3,
 });

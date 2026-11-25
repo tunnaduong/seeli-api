@@ -93,6 +93,16 @@ test('full SEELI flow', async () => {
   assert.equal((await call('GET', `/moments/${post.json.id}/comments`, { token: tb })).json.length, 1);
   assert.equal((await call('GET', '/feed', { token: ta })).json[0].myComment, '綺麗');
 
+  // Owner replies to the perspective; only the owner may reply, and the friend sees it in the feed
+  const [cm] = (await call('GET', `/moments/${post.json.id}/comments`, { token: tb })).json;
+  assert.equal(cm.reply, null);
+  assert.equal((await call('PUT', `/moments/${post.json.id}/comments/${cm.id}/reply`, { token: ta, body: { text: 'no' } })).status, 404);
+  assert.equal((await call('PUT', `/moments/${post.json.id}/comments/${cm.id}/reply`, { token: tb, body: { text: 'ありがとう' } })).status, 200);
+  assert.equal((await call('GET', `/moments/${post.json.id}/comments`, { token: tb })).json[0].reply, 'ありがとう');
+  const fed = (await call('GET', '/feed', { token: ta })).json[0];
+  assert.equal(fed.myCommentReply, 'ありがとう');
+  assert.ok(fed.myCommentRepliedAt);
+
   // Time passes → photo comes back
   run('UPDATE moments SET reveal_at = ? WHERE id = ?', Date.now() - 1000, post.json.id);
   const mine = await call('GET', '/moments', { token: tb });

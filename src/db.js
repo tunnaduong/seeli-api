@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS comments (
 const hasColumn = (table, col) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
 if (!hasColumn('users', 'suspended_at')) db.exec('ALTER TABLE users ADD COLUMN suspended_at INTEGER');
 if (!hasColumn('reports', 'status')) db.exec("ALTER TABLE reports ADD COLUMN status TEXT NOT NULL DEFAULT 'open'");
+if (!hasColumn('comments', 'reply')) db.exec('ALTER TABLE comments ADD COLUMN reply TEXT');
+if (!hasColumn('comments', 'replied_at')) db.exec('ALTER TABLE comments ADD COLUMN replied_at INTEGER');
 if (!hasColumn('reports', 'resolved_at')) db.exec('ALTER TABLE reports ADD COLUMN resolved_at INTEGER');
 db.exec(`
 CREATE TABLE IF NOT EXISTS identities (

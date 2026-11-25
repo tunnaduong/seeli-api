@@ -377,6 +377,8 @@ export default async function routes(app) {
       all(
         `SELECT m.*, u.name AS author_name, u.handle AS author_handle,
                 (SELECT text FROM comments c WHERE c.moment_id = m.id AND c.author_id = ?) AS my_comment,
+                (SELECT reply FROM comments c WHERE c.moment_id = m.id AND c.author_id = ?) AS my_comment_reply,
+                (SELECT replied_at FROM comments c WHERE c.moment_id = m.id AND c.author_id = ?) AS my_comment_replied_at,
                 (SELECT opened_at FROM photo_views v WHERE v.moment_id = m.id AND v.viewer_id = ?) AS viewed_at
            FROM moments m
            JOIN friendships f ON f.friend_id = m.user_id AND f.user_id = ?
@@ -385,7 +387,7 @@ export default async function routes(app) {
             AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.user_id = ? AND b.blocked_id = m.user_id)
                                                       OR (b.user_id = m.user_id AND b.blocked_id = ?))
           ORDER BY m.created_at DESC LIMIT 100`,
-        req.user.id, req.user.id, req.user.id, req.user.id, req.user.id,
+        req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, req.user.id,
       ).map((m) => feedMoment(m)),
     );
 
@@ -422,7 +424,29 @@ export default async function routes(app) {
       return rows.map((c) => ({
         id: c.id, text: c.text, createdAt: iso(c.created_at),
         author: { id: c.author_id, name: c.name, handle: c.handle },
+        reply: c.reply ?? null, repliedAt: iso(c.replied_at),
       }));
+    });
+
+    /** The photo's owner answers a perspective. One reply per comment, editable; only that friend sees it. */
+    priv.put('/moments/:id/comments/:commentId/reply', async (req, reply) => {
+      const m = ownMoment(req);
+      if (!m) return bad(reply, 'not_found', 404);
+      const c = one('SELECT * FROM comments WHERE id = ? AND moment_id = ?', req.params.commentId, m.id);
+      if (!c) return bad(reply, 'not_found', 404);
+      const text = str(req.body?.text, 500);
+      if (!text) return bad(reply, 'text_required');
+      const now = Date.now();
+      run('UPDATE comments SET reply = ?, replied_at = ? WHERE id = ?', text, now, c.id);
+      if (!c.reply) notifyReply(req.user, c.author_id, m.id, req.log);
+      return { ok: true, reply: text, repliedAt: iso(now) };
+    });
+
+    priv.delete('/moments/:id/comments/:commentId/reply', async (req, reply) => {
+      const m = ownMoment(req);
+      if (!m) return bad(reply, 'not_found', 404);
+      run('UPDATE comments SET reply = NULL, replied_at = NULL WHERE id = ? AND moment_id = ?', req.params.commentId, m.id);
+      return { ok: true };
     });
 
     /** "Send your perspective" — one per person per moment, editable. */
@@ -467,6 +491,17 @@ const FRIEND_POST_TEXT = {
 };
 
 /** Tells friends (not blocked either way) that someone shared to their circle. Fire and forget. */
+const REPLY_TEXT = {
+  vi: (name) => ({ title: name, body: 'đã trả lời cảm nhận của bạn.' }),
+  ja: (name) => ({ title: name, body: 'さんがあなたの感想に返信しました。' }),
+};
+
+/** Tells a friend the photo's owner answered their perspective. */
+function notifyReply(owner, commenterId, momentId, log) {
+  pushToUsers([commenterId], (lang) => (REPLY_TEXT[lang] || REPLY_TEXT.vi)(owner.name),
+    { type: 'comment_reply', momentId }, log).catch(() => {});
+}
+
 function notifyCircle(author, momentId, log) {
   const friends = all(
     `SELECT f.friend_id AS id FROM friendships f
