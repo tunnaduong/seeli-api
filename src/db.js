@@ -93,6 +93,16 @@ CREATE TABLE IF NOT EXISTS admin_log (
 
 if (!hasColumn('identities', 'refresh_token')) db.exec('ALTER TABLE identities ADD COLUMN refresh_token TEXT');
 
+// A friend may open someone else's photo exactly once.
+db.exec(`
+CREATE TABLE IF NOT EXISTS photo_views (
+  moment_id TEXT NOT NULL REFERENCES moments(id) ON DELETE CASCADE,
+  viewer_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  opened_at INTEGER NOT NULL,
+  PRIMARY KEY (moment_id, viewer_id)
+);
+`);
+
 export const one = (sql, ...p) => db.prepare(sql).get(...p);
 export const all = (sql, ...p) => db.prepare(sql).all(...p);
 export const run = (sql, ...p) => db.prepare(sql).run(...p);

@@ -5,7 +5,7 @@ import { config } from './config.js';
 import { one, all, run, tx } from './db.js';
 import {
   hashPassword, verifyPassword, issueToken, requireUser,
-  checkPhotoSignature, newInviteCode, newId,
+  checkPhotoSignature, checkOncePhotoSignature, oncePhotoSignature, newInviteCode, newId,
 } from './auth.js';
 import { me, publicUser, myMoment, feedMoment, iso } from './serialize.js';
 import { verifyIdToken, TokenError } from './oidc.js';
@@ -34,6 +34,8 @@ function suggestHandle(...seeds) {
 const HANDLE_RE = /^[a-z0-9._-]{2,30}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const AUDIENCES = new Set(['onlyMe', 'circle']);
+const ONCE_GRACE_MS = 2 * 60_000;  // retry window after the first open
+const ONCE_URL_TTL_SEC = 120;
 const DAY = 86_400_000;
 
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -353,7 +355,8 @@ export default async function routes(app) {
     priv.get('/feed', async (req) =>
       all(
         `SELECT m.*, u.name AS author_name, u.handle AS author_handle,
-                (SELECT text FROM comments c WHERE c.moment_id = m.id AND c.author_id = ?) AS my_comment
+                (SELECT text FROM comments c WHERE c.moment_id = m.id AND c.author_id = ?) AS my_comment,
+                (SELECT opened_at FROM photo_views v WHERE v.moment_id = m.id AND v.viewer_id = ?) AS viewed_at
            FROM moments m
            JOIN friendships f ON f.friend_id = m.user_id AND f.user_id = ?
            JOIN users u ON u.id = m.user_id
@@ -361,9 +364,29 @@ export default async function routes(app) {
             AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.user_id = ? AND b.blocked_id = m.user_id)
                                                       OR (b.user_id = m.user_id AND b.blocked_id = ?))
           ORDER BY m.created_at DESC LIMIT 100`,
-        req.user.id, req.user.id, req.user.id, req.user.id,
-      ).map((m) => feedMoment(m, baseUrl(req))),
+        req.user.id, req.user.id, req.user.id, req.user.id, req.user.id,
+      ).map((m) => feedMoment(m)),
     );
+
+    /**
+     * Opens a friend's photo. The first call records the view; after a short grace
+     * period (for a flaky connection) the photo can never be opened again.
+     */
+    priv.post('/moments/:id/view', async (req, reply) => {
+      const m = one('SELECT * FROM moments WHERE id = ?', req.params.id);
+      if (!m || !canComment(req.user.id, m)) return bad(reply, 'not_found', 404);
+      const now = Date.now();
+      const seen = one('SELECT opened_at FROM photo_views WHERE moment_id = ? AND viewer_id = ?', m.id, req.user.id);
+      if (seen && now - seen.opened_at > ONCE_GRACE_MS) {
+        return reply.code(410).send({ error: 'already_viewed', viewedAt: iso(seen.opened_at) });
+      }
+      if (!seen) run('INSERT INTO photo_views (moment_id, viewer_id, opened_at) VALUES (?, ?, ?)', m.id, req.user.id, now);
+      const exp = Math.floor(now / 1000) + ONCE_URL_TTL_SEC;
+      return {
+        photoUrl: `${baseUrl(req)}/v1/photos/${m.id}?exp=${exp}&once=1&sig=${oncePhotoSignature(m.id, exp)}`,
+        viewedAt: iso(seen?.opened_at ?? now),
+      };
+    });
 
     /** Owner sees every comment; a friend sees only their own. */
     priv.get('/moments/:id/comments', async (req, reply) => {
@@ -404,13 +427,15 @@ export default async function routes(app) {
   // ---------- Photos (signed URL, no auth header) ----------
 
   app.get('/photos/:id', async (req, reply) => {
-    const { exp, sig } = req.query;
-    if (!exp || Number(exp) < Date.now() / 1000 || !checkPhotoSignature(req.params.id, exp, sig)) {
+    const { exp, sig, once } = req.query;
+    const valid = once ? checkOncePhotoSignature(req.params.id, exp, sig) : checkPhotoSignature(req.params.id, exp, sig);
+    if (!exp || Number(exp) < Date.now() / 1000 || !valid) {
       return bad(reply, 'forbidden', 403);
     }
     const m = one('SELECT * FROM moments WHERE id = ?', req.params.id);
-    if (!m || m.reveal_at > Date.now()) return bad(reply, 'not_found', 404);
-    reply.header('Cache-Control', 'private, max-age=3600');
+    // A one-time view is allowed before the reveal date: friends see it now, once.
+    if (!m || (!once && m.reveal_at > Date.now())) return bad(reply, 'not_found', 404);
+    reply.header('Cache-Control', once ? 'no-store' : 'private, max-age=3600');
     return reply.type('image/jpeg').send(createReadStream(join(config.photoDir, m.photo_path)));
   });
 }

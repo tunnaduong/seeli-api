@@ -79,6 +79,9 @@ export function checkAdminPassword(input) {
 /** Signed, short-lived photo URLs so the app can load them without auth headers. */
 export const photoSignature = (momentId, exp) => sign(`photo:${momentId}:${exp}`);
 export const checkPhotoSignature = (momentId, exp, sig) => safeEqual(photoSignature(momentId, exp), String(sig || ''));
+/** One-time-view URLs use their own signature, so they cannot be turned into normal ones. */
+export const oncePhotoSignature = (momentId, exp) => sign(`photo-once:${momentId}:${exp}`);
+export const checkOncePhotoSignature = (momentId, exp, sig) => safeEqual(oncePhotoSignature(momentId, exp), String(sig || ''));
 
 /** 8 chars without ambiguous letters — easy to read aloud when two people meet. */
 export function newInviteCode() {

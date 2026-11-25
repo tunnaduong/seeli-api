@@ -35,14 +35,18 @@ export const myMoment = (m, baseUrl) => ({
   photoUrl: photoUrl(m, baseUrl),
 });
 
-/** What a friend sees: never the place, and the photo only after its reveal date. */
-export const feedMoment = (m, baseUrl) => ({
+/**
+ * What a friend sees: never the place, and never a photo URL in the feed.
+ * The photo is fetched through POST /moments/:id/view, which works only once.
+ */
+export const feedMoment = (m) => ({
   id: m.id,
   author: { id: m.user_id, name: m.author_name, handle: m.author_handle },
   note: m.note,
   createdAt: iso(m.created_at),
   revealed: m.reveal_at <= Date.now(),
-  photoUrl: photoUrl(m, baseUrl),
+  photoUrl: null,
+  viewedAt: iso(m.viewed_at),
   myComment: m.my_comment ?? null,
   scene: parseInt(m.id.slice(0, 6), 16) % 3,
 });

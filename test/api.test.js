@@ -70,6 +70,24 @@ test('full SEELI flow', async () => {
   assert.equal(feed.json[0].placeName, undefined); // place never shared
   assert.equal((await call('POST', `/moments/${post.json.id}/reunite`, { token: tb })).status, 403);
 
+  // A friend can open the photo right away, but only once
+  const view = await call('POST', `/moments/${post.json.id}/view`, { token: ta });
+  assert.equal(view.status, 200);
+  const onceUrl = new URL(view.json.photoUrl);
+  const oncePhoto = await app.inject({ method: 'GET', url: onceUrl.pathname + onceUrl.search });
+  assert.equal(oncePhoto.statusCode, 200);
+  assert.equal(oncePhoto.headers['cache-control'], 'no-store');
+  // The one-time signature cannot be reused as a normal URL before the reveal date
+  const stripped = await app.inject({ method: 'GET', url: onceUrl.pathname + onceUrl.search.replace('&once=1', '') });
+  assert.equal(stripped.statusCode, 403);
+  assert.ok((await call('GET', '/feed', { token: ta })).json[0].viewedAt);
+  assert.equal((await call('POST', `/moments/${post.json.id}/view`, { token: ta })).status, 200); // grace retry
+  run('UPDATE photo_views SET opened_at = ? WHERE moment_id = ?', Date.now() - 10 * 60_000, post.json.id);
+  const again = await call('POST', `/moments/${post.json.id}/view`, { token: ta });
+  assert.equal(again.status, 410);
+  assert.equal(again.json.error, 'already_viewed');
+  assert.equal((await call('POST', `/moments/${post.json.id}/view`, { token: tb })).status, 404); // not for the owner
+
   // Perspective: owner sees it, other friends wouldn't
   assert.equal((await call('PUT', `/moments/${post.json.id}/comment`, { token: ta, body: { text: '綺麗' } })).status, 200);
   assert.equal((await call('GET', `/moments/${post.json.id}/comments`, { token: tb })).json.length, 1);
