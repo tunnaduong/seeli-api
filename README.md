@@ -17,7 +17,7 @@ Backend cho app SEELI — *See more. Live more.*
 
 Đã deploy sẵn ở `/www/wwwroot/seeli-api` (container `seeli-api`, cổng `127.0.0.1:8790`).
 
-### Đang chạy tại `https://seeli-api.tunnaduong.com`
+### Bản Node cũ trên Pi (trước khi chuyển sang Cloudflare, giờ chỉ còn làm relay)
 - Cloudflare Tunnel (wildcard `*.tunnaduong.com`) → nginx của aaPanel cổng 80 → `127.0.0.1:8790`. SSL do Cloudflare đảm nhận.
 - File nginx: `/www/server/panel/vhost/nginx/seeli-api.tunnaduong.com.conf` (viết tay, nên **không hiện trong danh sách Website của aaPanel**). Nếu muốn quản lý trong aaPanel: tạo site cùng tên miền với reverse proxy `http://127.0.0.1:8790`, aaPanel sẽ ghi đè file này.
 
@@ -64,7 +64,7 @@ sudo tar czf ~/seeli-backup-$(date +%F).tgz data   # sao lưu
 ```
 
 ## Trang quản trị — `/admin`
-**https://seeli-api.tunnaduong.com/admin**
+**https://api.seeli.cam/admin**
 
 - **Tổng quan:** số người dùng, ảnh, kết nối, báo cáo đang mở, dung lượng ổ đĩa, trạng thái chế độ demo, nhật ký thao tác.
 - **Người dùng:** tìm kiếm; khoá / mở khoá (khoá = đăng xuất ngay + không đăng nhập được); đăng xuất mọi thiết bị; xoá vĩnh viễn (phải gõ lại tên người dùng, xoá luôn ảnh).
@@ -119,7 +119,7 @@ npm test
 
 ## Cloudflare (production since 2026-11-26)
 
-The API runs as a Cloudflare Worker in `worker/` at `https://seeli-api.tunnaduong.com`:
+The API runs as a Cloudflare Worker in `worker/` at `https://api.seeli.cam` (also still at `https://seeli-api.tunnaduong.com` for app builds released before the move):
 D1 database `seeli` (schema in `worker/schema.sql`) and R2 bucket `seeli-photos`
 (keys `<userId>/<momentId>.jpg`).
 
@@ -132,5 +132,5 @@ Secrets (`npx wrangler secret put NAME`): `JWT_SECRET`, `ADMIN_PASSWORD`, `APPLE
 Local dev: `npm run dev` in `worker/` with a `.dev.vars` file.
 
 Workers cannot open HTTP/2 connections to APNs, so the Node server in `src/` keeps running on the
-Pi with `RELAY_ONLY=true` as the iPhone push relay at `https://seeli-push.tunnaduong.com/apns`
+Pi with `RELAY_ONLY=true` as the iPhone push relay at `https://push.seeli.cam/apns` (tunnel public hostname → Pi nginx; `seeli-push.tunnaduong.com` still works)
 (same `PUSH_RELAY_SECRET`). Its old `data/` folder is the pre-migration backup.

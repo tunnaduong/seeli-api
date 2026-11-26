@@ -5,17 +5,21 @@
   "compatibility_date": "2025-09-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  "routes": [{ "pattern": "seeli-api.tunnaduong.com", "custom_domain": true }],
+  "routes": [
+    { "pattern": "api.seeli.cam", "custom_domain": true },
+    // Kept for app builds released before the move to seeli.cam.
+    { "pattern": "seeli-api.tunnaduong.com", "custom_domain": true }
+  ],
   "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
   "vars": {
-    "PUBLIC_URL": "https://seeli-api.tunnaduong.com",
+    "PUBLIC_URL": "https://api.seeli.cam",
     "REVEAL_MIN_DAYS": "27",
     "REVEAL_MAX_DAYS": "37",
     "ALLOW_DEMO": "false",
     "MAX_PHOTO_MB": "8",
     "APPLE_AUDIENCES": "com.tunnaduong.seeli",
     "APPLE_TEAM_ID": "62H5L8QDTS",
-    "PUSH_RELAY_URL": "https://seeli-push.tunnaduong.com"
+    "PUSH_RELAY_URL": "https://push.seeli.cam"
   },
   // Secrets (wrangler secret put): JWT_SECRET, ADMIN_PASSWORD, APPLE_KEY_ID, APPLE_KEY,
   // GOOGLE_CLIENT_IDS, FCM_SERVICE_ACCOUNT, PUSH_RELAY_SECRET.
