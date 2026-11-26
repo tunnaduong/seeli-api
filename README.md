@@ -116,3 +116,21 @@ npm install
 npm run dev     # http://localhost:8790
 npm test
 ```
+
+## Cloudflare (production since 2026-11-26)
+
+The API runs as a Cloudflare Worker in `worker/` at `https://seeli-api.tunnaduong.com`:
+D1 database `seeli` (schema in `worker/schema.sql`) and R2 bucket `seeli-photos`
+(keys `<userId>/<momentId>.jpg`).
+
+```bash
+cd worker && npm install && npx wrangler deploy
+```
+
+Secrets (`npx wrangler secret put NAME`): `JWT_SECRET`, `ADMIN_PASSWORD`, `APPLE_KEY_ID`, `APPLE_KEY`
+(.p8 contents), `GOOGLE_CLIENT_IDS`, `FCM_SERVICE_ACCOUNT` (JSON contents), `PUSH_RELAY_SECRET`.
+Local dev: `npm run dev` in `worker/` with a `.dev.vars` file.
+
+Workers cannot open HTTP/2 connections to APNs, so the Node server in `src/` keeps running on the
+Pi with `RELAY_ONLY=true` as the iPhone push relay at `https://seeli-push.tunnaduong.com/apns`
+(same `PUSH_RELAY_SECRET`). Its old `data/` folder is the pre-migration backup.
