@@ -19,7 +19,7 @@
   // Secrets (wrangler secret put): JWT_SECRET, ADMIN_PASSWORD, APPLE_KEY_ID, APPLE_KEY,
   // GOOGLE_CLIENT_IDS, FCM_SERVICE_ACCOUNT, PUSH_RELAY_SECRET.
   "d1_databases": [
-    { "binding": "DB", "database_name": "seeli", "database_id": "00000000-0000-0000-0000-000000000000" }
+    { "binding": "DB", "database_name": "seeli", "database_id": "66369c06-4156-46bb-9632-146e9bde4410" }
   ],
   "r2_buckets": [
     { "binding": "PHOTOS", "bucket_name": "seeli-photos" }
