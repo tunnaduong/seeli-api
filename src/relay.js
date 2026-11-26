@@ -12,7 +12,7 @@ const same = (a, b) => {
 };
 
 export default async function relayRoutes(app) {
-  app.get('/v1/health', async () => ({ ok: true, relay: true, apns: apnsConfigured() }));
+  if (config.relayOnly) app.get('/v1/health', async () => ({ ok: true, relay: true, apns: apnsConfigured() }));
 
   app.post('/apns', async (req, reply) => {
     if (!config.pushRelaySecret || !same(req.headers['x-relay-secret'] || '', config.pushRelaySecret)) {

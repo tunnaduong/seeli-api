@@ -11,9 +11,9 @@ export function buildApp(opts = {}) {
     trustProxy: true, // behind aaPanel's nginx
     bodyLimit: 1024 * 1024,
   });
-  if (config.relayOnly) {
-    app.register(relayRoutes);
-  } else {
+  // The relay runs alongside the old API too, so both can work during the move.
+  app.register(relayRoutes);
+  if (!config.relayOnly) {
     app.register(multipart, { limits: { fileSize: config.maxPhotoBytes, files: 1, fields: 10 } });
     app.register(routes, { prefix: '/v1' });
     app.register(adminRoutes);
