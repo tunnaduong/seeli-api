@@ -11,7 +11,7 @@
     "PUBLIC_URL": "https://seeli-api.tunnaduong.com",
     "REVEAL_MIN_DAYS": "27",
     "REVEAL_MAX_DAYS": "37",
-    "ALLOW_DEMO": "true",
+    "ALLOW_DEMO": "false",
     "MAX_PHOTO_MB": "8",
     "APPLE_AUDIENCES": "com.tunnaduong.seeli",
     "APPLE_TEAM_ID": "62H5L8QDTS",
