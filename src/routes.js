@@ -276,8 +276,12 @@ export default async function routes(app) {
     priv.post('/friends/:id/block', async (req, reply) => {
       if (!one('SELECT 1 FROM users WHERE id = ?', req.params.id)) return bad(reply, 'not_found', 404);
       tx(() => {
+        const mine = one('SELECT * FROM friendships WHERE user_id = ? AND friend_id = ?', req.user.id, req.params.id);
+        const theirs = one('SELECT * FROM friendships WHERE user_id = ? AND friend_id = ?', req.params.id, req.user.id);
         unfriend(req.user.id, req.params.id);
-        run('INSERT OR IGNORE INTO blocks (user_id, blocked_id, created_at) VALUES (?, ?, ?)', req.user.id, req.params.id, Date.now());
+        run(`INSERT OR IGNORE INTO blocks (user_id, blocked_id, created_at, friend_since, memo, their_memo)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          req.user.id, req.params.id, Date.now(), mine?.created_at ?? null, mine?.memo ?? null, theirs?.memo ?? null);
       });
       return { ok: true };
     });
@@ -286,9 +290,21 @@ export default async function routes(app) {
       all('SELECT u.* FROM blocks b JOIN users u ON u.id = b.blocked_id WHERE b.user_id = ?', req.user.id).map(publicUser),
     );
 
+    /** Unblocking restores the friendship the block ended (and with it their circle posts). */
     priv.delete('/blocks/:id', async (req) => {
-      run('DELETE FROM blocks WHERE user_id = ? AND blocked_id = ?', req.user.id, req.params.id);
-      return { ok: true };
+      let restored = false;
+      tx(() => {
+        const b = one('SELECT * FROM blocks WHERE user_id = ? AND blocked_id = ?', req.user.id, req.params.id);
+        run('DELETE FROM blocks WHERE user_id = ? AND blocked_id = ?', req.user.id, req.params.id);
+        if (b?.friend_since && !isBlockedEitherWay(req.user.id, req.params.id)) {
+          run('INSERT OR IGNORE INTO friendships (user_id, friend_id, memo, created_at) VALUES (?, ?, ?, ?)',
+            req.user.id, req.params.id, b.memo ?? '', b.friend_since);
+          run('INSERT OR IGNORE INTO friendships (user_id, friend_id, memo, created_at) VALUES (?, ?, ?, ?)',
+            req.params.id, req.user.id, b.their_memo ?? '', b.friend_since);
+          restored = true;
+        }
+      });
+      return { ok: true, friendRestored: restored };
     });
 
     priv.post('/reports', async (req, reply) => {

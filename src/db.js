@@ -72,6 +72,10 @@ if (!hasColumn('users', 'suspended_at')) db.exec('ALTER TABLE users ADD COLUMN s
 if (!hasColumn('reports', 'status')) db.exec("ALTER TABLE reports ADD COLUMN status TEXT NOT NULL DEFAULT 'open'");
 if (!hasColumn('comments', 'reply')) db.exec('ALTER TABLE comments ADD COLUMN reply TEXT');
 if (!hasColumn('comments', 'replied_at')) db.exec('ALTER TABLE comments ADD COLUMN replied_at INTEGER');
+// Blocking ends a friendship; these remember it so unblocking can bring it back.
+if (!hasColumn('blocks', 'friend_since')) db.exec('ALTER TABLE blocks ADD COLUMN friend_since INTEGER');
+if (!hasColumn('blocks', 'memo')) db.exec('ALTER TABLE blocks ADD COLUMN memo TEXT');
+if (!hasColumn('blocks', 'their_memo')) db.exec('ALTER TABLE blocks ADD COLUMN their_memo TEXT');
 if (!hasColumn('reports', 'resolved_at')) db.exec('ALTER TABLE reports ADD COLUMN resolved_at INTEGER');
 db.exec(`
 CREATE TABLE IF NOT EXISTS identities (

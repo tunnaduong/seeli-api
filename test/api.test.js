@@ -118,6 +118,12 @@ test('full SEELI flow', async () => {
   assert.equal((await call('GET', '/feed', { token: ta })).json.length, 0);
   assert.equal((await call('POST', '/friends', { token: ta, body: { code: b.json.user.inviteCode } })).status, 404);
 
+  // Unblock brings the friendship and the old posts back
+  const un = await call('DELETE', `/blocks/${b.json.user.id}`, { token: ta });
+  assert.equal(un.json.friendRestored, true);
+  assert.equal((await call('GET', '/feed', { token: ta })).json.length, 1);
+  assert.equal((await call('GET', '/friends', { token: tb })).json.length, 1);
+
   // Logout revokes tokens; delete removes everything
   await call('POST', '/auth/logout', { token: ta });
   assert.equal((await call('GET', '/me', { token: ta })).status, 401);
