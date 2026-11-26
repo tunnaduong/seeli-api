@@ -33,7 +33,9 @@ async function suggestHandle(...seeds) {
 
 const HANDLE_RE = /^[a-z0-9._-]{2,30}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const AUDIENCES = new Set(['onlyMe', 'circle']);
+const AUDIENCES = new Set(['onlyMe', 'circle', 'closeFriends', 'selected']);
+const VISIBILITIES = new Set(['owner', 'circle']);
+const MAX_RECIPIENTS = 200;
 const ONCE_GRACE_MS = 2 * 60_000;  // retry window after the first open
 const ONCE_URL_TTL_SEC = 120;
 const DAY = 86_400_000;
@@ -70,6 +72,117 @@ const isBlockedEitherWay = async (a, b) =>
   !!(await one('SELECT 1 FROM blocks WHERE (user_id = ? AND blocked_id = ?) OR (user_id = ? AND blocked_id = ?)', a, b, b, a));
 
 const areFriends = async (a, b) => !!(await one('SELECT 1 FROM friendships WHERE user_id = ? AND friend_id = ?', a, b));
+
+/** Parses recipient ids (JSON array or comma list) and keeps only the owner's friends. */
+async function validRecipients(ownerId, raw) {
+  let ids = raw;
+  if (typeof raw === 'string') {
+    try { ids = JSON.parse(raw); } catch { ids = raw.split(','); }
+  }
+  if (!Array.isArray(ids)) return [];
+  ids = [...new Set(ids.map((v) => String(v).trim()).filter(Boolean))].slice(0, MAX_RECIPIENTS);
+  if (!ids.length) return [];
+  const rows = await all(
+    'SELECT friend_id FROM friendships WHERE user_id = ? AND friend_id IN (SELECT value FROM json_each(?))',
+    ownerId, JSON.stringify(ids),
+  );
+  return rows.map((r) => r.friend_id);
+}
+
+const setRecipients = (momentId, ids) => batch([
+  ['DELETE FROM moment_recipients WHERE moment_id = ?', momentId],
+  ...ids.map((uid) => ['INSERT OR IGNORE INTO moment_recipients (moment_id, user_id) VALUES (?, ?)', momentId, uid]),
+]);
+
+const recipientsOf = async (momentId) =>
+  (await all('SELECT user_id FROM moment_recipients WHERE moment_id = ?', momentId)).map((r) => r.user_id);
+
+/** Whether `userId` may see (and comment on) moment `m`. */
+async function canSee(userId, m) {
+  if (!m) return false;
+  if (m.user_id === userId) return true;
+  if (m.audience === 'onlyMe') return false;
+  // The owner's row carries the close-friend flag.
+  const f = await one('SELECT close FROM friendships WHERE user_id = ? AND friend_id = ?', m.user_id, userId);
+  if (!f || await isBlockedEitherWay(userId, m.user_id)) return false;
+  if (m.audience === 'circle') return true;
+  if (m.audience === 'closeFriends') return !!f.close;
+  if (m.audience === 'selected') {
+    return !!(await one('SELECT 1 FROM moment_recipients WHERE moment_id = ? AND user_id = ?', m.id, userId));
+  }
+  return false;
+}
+
+/** People who can see a moment (for push), excluding the owner. */
+async function audienceOf(m) {
+  if (m.audience === 'onlyMe') return [];
+  const extra = m.audience === 'closeFriends' ? 'AND f.close = 1'
+    : m.audience === 'selected' ? 'AND EXISTS (SELECT 1 FROM moment_recipients r WHERE r.moment_id = ? AND r.user_id = f.friend_id)'
+      : '';
+  return (await all(
+    `SELECT f.friend_id AS id FROM friendships f
+      WHERE f.user_id = ? ${extra}
+        AND EXISTS (SELECT 1 FROM friendships r WHERE r.user_id = f.friend_id AND r.friend_id = f.user_id)
+        AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.user_id = f.friend_id AND b.blocked_id = f.user_id)
+                                                  OR (b.user_id = f.user_id AND b.blocked_id = f.friend_id))`,
+    ...(m.audience === 'selected' ? [m.user_id, m.id] : [m.user_id]),
+  )).map((r) => r.id);
+}
+
+// ---------- Comment visibility ----------
+
+/**
+ * Who sees a comment on moment m (owner O), for viewer V:
+ *  - O sees everything; an author always sees their own comments.
+ *  - O's comments: replies to a private comment are seen by that comment's author;
+ *    otherwise O's comments are public to the post's audience.
+ *  - Anyone else's comment: public only when visibility = 'circle' and O approved it.
+ */
+function commentVisible(cm, viewerId, ownerId, byId) {
+  if (viewerId === ownerId || cm.author_id === viewerId) return true;
+  const parent = cm.parent_id ? byId.get(cm.parent_id) : null;
+  if (cm.parent_id && !parent) return false; // parent deleted
+  if (parent && !commentVisible(parent, viewerId, ownerId, byId)) return false;
+  // The owner's top-level comments are public; their replies follow the comment they answer.
+  if (cm.author_id === ownerId) return !parent || isPublic(parent, ownerId) || parent.author_id === viewerId;
+  return isPublic(cm, ownerId);
+}
+
+const isPublic = (cm, ownerId) =>
+  cm.author_id === ownerId || (cm.visibility === 'circle' && cm.status === 'approved');
+
+async function commentsOf(momentIds) {
+  if (!momentIds.length) return new Map();
+  const rows = await all(
+    `SELECT c.*, u.name, u.handle FROM comments c JOIN users u ON u.id = c.author_id
+      WHERE c.moment_id IN (SELECT value FROM json_each(?)) ORDER BY c.created_at`,
+    JSON.stringify(momentIds),
+  );
+  const byMoment = new Map();
+  for (const r of rows) {
+    if (!byMoment.has(r.moment_id)) byMoment.set(r.moment_id, []);
+    byMoment.get(r.moment_id).push(r);
+  }
+  return byMoment;
+}
+
+/** Comments of moment m that viewer may see, oldest first. */
+function visibleComments(rows, viewerId, ownerId) {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return rows.filter((r) => commentVisible(r, viewerId, ownerId, byId));
+}
+
+const commentJson = (r, viewerId) => ({
+  id: r.id,
+  parentId: r.parent_id ?? null,
+  text: r.text,
+  createdAt: iso(r.created_at),
+  editedAt: iso(r.edited_at),
+  author: { id: r.author_id, name: r.name, handle: r.handle },
+  visibility: r.visibility,
+  status: r.status,
+  mine: r.author_id === viewerId,
+});
 
 function revealTime(createdAt, demo) {
   if (demo && config.allowDemo) return Date.now() + (45 + Math.random() * 45) * 1000;
@@ -282,38 +395,99 @@ priv.get('/invites/:code', async (c) => {
   const meId = c.get('user').id;
   const u = await one('SELECT * FROM users WHERE invite_code = ?', String(c.req.param('code')).toUpperCase());
   if (!u || await isBlockedEitherWay(meId, u.id)) return bad(c, 'not_found', 404);
-  return c.json({ user: publicUser(u), isSelf: u.id === meId, isFriend: await areFriends(meId, u.id) });
+  return c.json({
+    user: publicUser(u), isSelf: u.id === meId, isFriend: await areFriends(meId, u.id),
+    requested: !!(await one('SELECT 1 FROM friend_requests WHERE from_id = ? AND to_id = ?', meId, u.id)),
+    requestedMe: !!(await one('SELECT 1 FROM friend_requests WHERE from_id = ? AND to_id = ?', u.id, meId)),
+  });
 });
 
+/** Makes two people friends and clears any pending requests between them. */
+const befriend = (a, b, addedBy, now = Date.now()) => batch([
+  ['INSERT OR IGNORE INTO friendships (user_id, friend_id, created_at, added_by) VALUES (?, ?, ?, ?)', a, b, now, addedBy],
+  ['INSERT OR IGNORE INTO friendships (user_id, friend_id, created_at, added_by) VALUES (?, ?, ?, ?)', b, a, now, addedBy],
+  ['DELETE FROM friend_requests WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)', a, b, b, a],
+]);
+
+/**
+ * Scan a friend's code. Body: { code, request? }.
+ * New apps send request: true → a friend request the other person must accept
+ * (or instant friendship if they had already asked us). Older apps connect at once.
+ */
 priv.post('/friends', async (c) => {
   const user = c.get('user');
-  const code = str((await body(c)).code, 20).toUpperCase();
+  const b = await body(c);
+  const code = str(b.code, 20).toUpperCase();
   const u = await one('SELECT * FROM users WHERE invite_code = ?', code);
   if (!u || await isBlockedEitherWay(user.id, u.id)) return bad(c, 'not_found', 404);
   if (u.id === user.id) return bad(c, 'self');
-  const now = Date.now();
-  const isNew = !(await areFriends(user.id, u.id));
-  await batch([
-    ['INSERT OR IGNORE INTO friendships (user_id, friend_id, created_at, added_by) VALUES (?, ?, ?, ?)', user.id, u.id, now, user.id],
-    ['INSERT OR IGNORE INTO friendships (user_id, friend_id, created_at, added_by) VALUES (?, ?, ?, ?)', u.id, user.id, now, user.id],
-  ]);
-  if (isNew) notifyFriendAdded(user, u.id);
+  const already = await areFriends(user.id, u.id);
+
+  if (b.request === true) {
+    if (already) return c.json({ status: 'friends', friend: await friendJson(user.id, u.id) });
+    const theyAsked = await one('SELECT 1 FROM friend_requests WHERE from_id = ? AND to_id = ?', u.id, user.id);
+    if (theyAsked) {
+      await befriend(user.id, u.id, user.id);
+      notifyFriendAdded(user, u.id);
+      return c.json({ status: 'friends', friend: await friendJson(user.id, u.id) }, 201);
+    }
+    const res = await run('INSERT OR IGNORE INTO friend_requests (from_id, to_id, created_at) VALUES (?, ?, ?)', user.id, u.id, Date.now());
+    if (res.changes) notifyFriendRequest(user, u.id);
+    return c.json({ status: 'requested', user: publicUser(u) }, 201);
+  }
+
+  await befriend(user.id, u.id, user.id);
+  if (!already) notifyFriendAdded(user, u.id);
   return c.json(await friendJson(user.id, u.id), 201);
 });
 
+priv.get('/friend-requests', async (c) => {
+  const id = c.get('user').id;
+  const row = (r) => ({ user: { id: r.id, name: r.name, handle: r.handle }, createdAt: iso(r.created_at) });
+  const incoming = await all(
+    `SELECT u.id, u.name, u.handle, r.created_at FROM friend_requests r JOIN users u ON u.id = r.from_id
+      WHERE r.to_id = ? ORDER BY r.created_at DESC`, id);
+  const outgoing = await all(
+    `SELECT u.id, u.name, u.handle, r.created_at FROM friend_requests r JOIN users u ON u.id = r.to_id
+      WHERE r.from_id = ? ORDER BY r.created_at DESC`, id);
+  return c.json({ incoming: incoming.map(row), outgoing: outgoing.map(row) });
+});
+
+priv.post('/friend-requests/:id/accept', async (c) => {
+  const user = c.get('user');
+  const from = c.req.param('id');
+  if (!(await one('SELECT 1 FROM friend_requests WHERE from_id = ? AND to_id = ?', from, user.id))) return bad(c, 'not_found', 404);
+  if (await isBlockedEitherWay(user.id, from)) return bad(c, 'not_found', 404);
+  await befriend(user.id, from, user.id);
+  notifyFriendAdded(user, from);
+  return c.json(await friendJson(user.id, from), 201);
+});
+
+/** Decline an incoming request or cancel an outgoing one. */
+priv.delete('/friend-requests/:id', async (c) => {
+  const me = c.get('user').id, other = c.req.param('id');
+  await run('DELETE FROM friend_requests WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)', other, me, me, other);
+  return c.json({ ok: true });
+});
+
 priv.get('/friends', async (c) => c.json((await all(
-  `SELECT u.id, u.name, u.handle, u.bio, f.memo, f.created_at
+  `SELECT u.id, u.name, u.handle, u.bio, f.memo, f.close, f.created_at
      FROM friendships f JOIN users u ON u.id = f.friend_id
     WHERE f.user_id = ? ORDER BY f.created_at DESC`,
   c.get('user').id,
 )).map(friendRow)));
 
+/** Body: { memo?, close? } — close marks a close friend (for the "Close friends" audience). */
 priv.patch('/friends/:id', async (c) => {
   const meId = c.get('user').id;
-  const r = await run('UPDATE friendships SET memo = ? WHERE user_id = ? AND friend_id = ?',
-    str((await body(c)).memo, 500), meId, c.req.param('id'));
-  if (!r.changes) return bad(c, 'not_found', 404);
-  return c.json(await friendJson(meId, c.req.param('id')));
+  const b = await body(c);
+  const f = await one('SELECT * FROM friendships WHERE user_id = ? AND friend_id = ?', meId, c.req.param('id'));
+  if (!f) return bad(c, 'not_found', 404);
+  await run('UPDATE friendships SET memo = ?, close = ? WHERE user_id = ? AND friend_id = ?',
+    b.memo !== undefined ? str(b.memo, 500) : f.memo,
+    b.close !== undefined ? (b.close ? 1 : 0) : f.close,
+    meId, f.friend_id);
+  return c.json(await friendJson(meId, f.friend_id));
 });
 
 priv.delete('/friends/:id', async (c) => {
@@ -328,6 +502,7 @@ priv.post('/friends/:id/block', async (c) => {
   const theirs = await one('SELECT * FROM friendships WHERE user_id = ? AND friend_id = ?', other, meId);
   await batch([
     [UNFRIEND, ...unfriendParams(meId, other)],
+    ['DELETE FROM friend_requests WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)', meId, other, other, meId],
     [`INSERT OR IGNORE INTO blocks (user_id, blocked_id, created_at, friend_since, memo, their_memo)
       VALUES (?, ?, ?, ?, ?, ?)`,
     meId, other, Date.now(), mine?.created_at ?? null, mine?.memo ?? null, theirs?.memo ?? null],
@@ -367,11 +542,30 @@ priv.post('/reports', async (c) => {
 
 // ---------- Moments ----------
 
-priv.get('/moments', async (c) => c.json((await all(
-  `SELECT m.*, (SELECT COUNT(*) FROM comments c WHERE c.moment_id = m.id) AS comment_count
-     FROM moments m WHERE m.user_id = ? ORDER BY m.created_at DESC`,
-  c.get('user').id,
-)).map((m) => myMoment(m, baseUrl(c)))));
+/** My moments, with comment counts and who each one is shared with. */
+priv.get('/moments', async (c) => {
+  const id = c.get('user').id;
+  const rows = await all(
+    `SELECT m.*,
+            (SELECT COUNT(*) FROM comments c WHERE c.moment_id = m.id AND c.author_id <> m.user_id) AS comment_count,
+            (SELECT COUNT(*) FROM comments c WHERE c.moment_id = m.id AND c.visibility = 'circle'
+                AND c.status = 'pending' AND c.author_id <> m.user_id) AS pending_count,
+            (SELECT MAX(c.created_at) FROM comments c WHERE c.moment_id = m.id AND c.author_id <> m.user_id) AS last_comment_at,
+            (SELECT json_group_array(r.user_id) FROM moment_recipients r WHERE r.moment_id = m.id) AS recipient_ids
+       FROM moments m WHERE m.user_id = ? ORDER BY m.created_at DESC`,
+    id,
+  );
+  return c.json(rows.map((m) => myMoment(m, baseUrl(c))));
+});
+
+const momentWithExtras = async (id) => one(
+  `SELECT m.*,
+          (SELECT COUNT(*) FROM comments c WHERE c.moment_id = m.id AND c.author_id <> m.user_id) AS comment_count,
+          (SELECT COUNT(*) FROM comments c WHERE c.moment_id = m.id AND c.visibility = 'circle'
+              AND c.status = 'pending' AND c.author_id <> m.user_id) AS pending_count,
+          (SELECT MAX(c.created_at) FROM comments c WHERE c.moment_id = m.id AND c.author_id <> m.user_id) AS last_comment_at,
+          (SELECT json_group_array(r.user_id) FROM moment_recipients r WHERE r.moment_id = m.id) AS recipient_ids
+     FROM moments m WHERE m.id = ?`, id);
 
 priv.post('/moments', async (c) => {
   const user = c.get('user');
@@ -392,7 +586,9 @@ priv.post('/moments', async (c) => {
   const now = Date.now();
   const claimed = Date.parse(field('createdAt'));
   const createdAt = Number.isFinite(claimed) && Math.abs(claimed - now) < DAY ? claimed : now;
-  const audience = AUDIENCES.has(field('audience')) ? field('audience') : 'onlyMe';
+  let audience = AUDIENCES.has(field('audience')) ? field('audience') : 'onlyMe';
+  const recipients = audience === 'selected' ? await validRecipients(user.id, field('recipients')) : [];
+  if (audience === 'selected' && !recipients.length) return bad(c, 'recipients_required');
   const id = newId();
   const key = `${user.id}/${id}.jpg`;
   await bindings.PHOTOS.put(key, photo, { httpMetadata: { contentType: 'image/jpeg' } });
@@ -403,8 +599,10 @@ priv.post('/moments', async (c) => {
     id, user.id, str(field('note'), 80), str(field('placeName'), 120) || null, audience, key,
     createdAt, Math.round(revealTime(createdAt, field('demo') === 'true')),
   );
-  if (audience === 'circle') notifyCircle(user, id);
-  return c.json(myMoment(await one('SELECT * FROM moments WHERE id = ?', id), baseUrl(c)), 201);
+  if (recipients.length) await setRecipients(id, recipients);
+  const m = await momentWithExtras(id);
+  notifyNewPost(user, m);
+  return c.json(myMoment(m, baseUrl(c)), 201);
 });
 
 priv.post('/moments/:id/reunite', async (c) => {
@@ -412,10 +610,12 @@ priv.post('/moments/:id/reunite', async (c) => {
   if (!m) return bad(c, 'not_found', 404);
   if (m.reveal_at > Date.now()) return bad(c, 'not_yet', 403);
   if (!m.reunited_at) await run('UPDATE moments SET reunited_at = ? WHERE id = ?', Date.now(), m.id);
-  return c.json(myMoment(await one('SELECT * FROM moments WHERE id = ?', m.id), baseUrl(c)));
+  return c.json(myMoment(await momentWithExtras(m.id), baseUrl(c)));
 });
 
+/** Body: { reflection?, audience?, recipients? }. */
 priv.patch('/moments/:id', async (c) => {
+  const user = c.get('user');
   const m = await ownMoment(c);
   if (!m) return bad(c, 'not_found', 404);
   const b = await body(c);
@@ -423,9 +623,23 @@ priv.patch('/moments/:id', async (c) => {
     await run('UPDATE moments SET reflection = ? WHERE id = ?', str(b.reflection, 500) || null, m.id);
   }
   if (AUDIENCES.has(b.audience)) {
-    await run('UPDATE moments SET audience = ? WHERE id = ?', b.audience, m.id);
+    const before = new Set(await audienceOf(m));
+    let recipients = [];
+    if (b.audience === 'selected') {
+      recipients = await validRecipients(user.id, b.recipients);
+      if (!recipients.length) return bad(c, 'recipients_required');
+    }
+    await batch([
+      ['UPDATE moments SET audience = ? WHERE id = ?', b.audience, m.id],
+      ['DELETE FROM moment_recipients WHERE moment_id = ?', m.id],
+      ...recipients.map((uid) => ['INSERT OR IGNORE INTO moment_recipients (moment_id, user_id) VALUES (?, ?)', m.id, uid]),
+    ]);
+    // Tell only the people who can see it now and could not before.
+    const updated = await one('SELECT * FROM moments WHERE id = ?', m.id);
+    const added = (await audienceOf(updated)).filter((uid) => !before.has(uid));
+    if (added.length) background(pushToUsers(added, text(FRIEND_POST_TEXT, user.name), { type: 'friend_post', momentId: m.id }));
   }
-  return c.json(myMoment(await one('SELECT * FROM moments WHERE id = ?', m.id), baseUrl(c)));
+  return c.json(myMoment(await momentWithExtras(m.id), baseUrl(c)));
 });
 
 priv.delete('/moments/:id', async (c) => {
@@ -438,23 +652,48 @@ priv.delete('/moments/:id', async (c) => {
 
 // ---------- Let's connect ----------
 
+/**
+ * Friends' posts I may see. Besides the old single-perspective fields (kept for
+ * older apps) each post says how many comments I can see and when something that
+ * concerns me last happened (my comments, and answers to them).
+ */
 priv.get('/feed', async (c) => {
   const id = c.get('user').id;
-  return c.json((await all(
+  const rows = await all(
     `SELECT m.*, u.name AS author_name, u.handle AS author_handle,
-            (SELECT text FROM comments c WHERE c.moment_id = m.id AND c.author_id = ?) AS my_comment,
-            (SELECT reply FROM comments c WHERE c.moment_id = m.id AND c.author_id = ?) AS my_comment_reply,
-            (SELECT replied_at FROM comments c WHERE c.moment_id = m.id AND c.author_id = ?) AS my_comment_replied_at,
             (SELECT opened_at FROM photo_views v WHERE v.moment_id = m.id AND v.viewer_id = ?) AS viewed_at
        FROM moments m
-       JOIN friendships f ON f.friend_id = m.user_id AND f.user_id = ?
+       JOIN friendships f ON f.user_id = m.user_id AND f.friend_id = ?
        JOIN users u ON u.id = m.user_id
-      WHERE m.audience = 'circle'
+      WHERE (m.audience = 'circle'
+             OR (m.audience = 'closeFriends' AND f.close = 1)
+             OR (m.audience = 'selected' AND EXISTS (SELECT 1 FROM moment_recipients r WHERE r.moment_id = m.id AND r.user_id = ?)))
+        AND EXISTS (SELECT 1 FROM friendships mine WHERE mine.user_id = ? AND mine.friend_id = m.user_id)
         AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.user_id = ? AND b.blocked_id = m.user_id)
                                                   OR (b.user_id = m.user_id AND b.blocked_id = ?))
       ORDER BY m.created_at DESC LIMIT 100`,
-    id, id, id, id, id, id, id,
-  )).map((m) => feedMoment(m)));
+    id, id, id, id, id, id,
+  );
+  const comments = await commentsOf(rows.map((m) => m.id));
+  return c.json(rows.map((m) => {
+    const visible = visibleComments(comments.get(m.id) || [], id, m.user_id);
+    const mineTop = visible.filter((r) => r.author_id === id && !r.parent_id);
+    const myIds = new Set(visible.filter((r) => r.author_id === id).map((r) => r.id));
+    const toMe = visible.filter((r) => r.author_id !== id && r.parent_id && myIds.has(r.parent_id));
+    const ownerToMe = toMe.filter((r) => r.author_id === m.user_id);
+    const last = (list) => list.length ? list[list.length - 1] : null;
+    const mine = visible.filter((r) => r.author_id === id);
+    return feedMoment({
+      ...m,
+      my_comment: last(mineTop)?.text ?? null,
+      my_comment_reply: last(ownerToMe)?.text ?? null,
+      my_comment_replied_at: last(ownerToMe)?.created_at ?? null,
+      comment_count: visible.length,
+      my_comment_count: mine.length,
+      replies_to_me: toMe.length,
+      last_activity_at: Math.max(0, ...mine.map((r) => r.created_at), ...toMe.map((r) => r.created_at)) || null,
+    });
+  }));
 });
 
 /**
@@ -464,7 +703,7 @@ priv.get('/feed', async (c) => {
 priv.post('/moments/:id/view', async (c) => {
   const meId = c.get('user').id;
   const m = await one('SELECT * FROM moments WHERE id = ?', c.req.param('id'));
-  if (!m || !(await canComment(meId, m))) return bad(c, 'not_found', 404);
+  if (!m || m.user_id === meId || !(await canSee(meId, m))) return bad(c, 'not_found', 404);
   const now = Date.now();
   const seen = await one('SELECT opened_at FROM photo_views WHERE moment_id = ? AND viewer_id = ?', m.id, meId);
   if (seen && now - seen.opened_at > ONCE_GRACE_MS) {
@@ -478,98 +717,237 @@ priv.post('/moments/:id/view', async (c) => {
   });
 });
 
-/** Owner sees every comment; a friend sees only their own. */
+// ---------- Comments ----------
+
+const loadComments = async (m) => (await commentsOf([m.id])).get(m.id) || [];
+
+/**
+ * ?v=2 → every comment the viewer may see, flat (replies carry parentId).
+ * Without it (older apps): top-level comments only, each with the owner's latest reply;
+ * the owner sees all of them, a friend only their own.
+ */
 priv.get('/moments/:id/comments', async (c) => {
   const meId = c.get('user').id;
   const m = await one('SELECT * FROM moments WHERE id = ?', c.req.param('id'));
-  if (!m || !(m.user_id === meId || await canComment(meId, m))) return bad(c, 'not_found', 404);
+  if (!(await canSee(meId, m))) return bad(c, 'not_found', 404);
+  const rows = await loadComments(m);
+  if (c.req.query('v') === '2') {
+    return c.json({
+      isOwner: m.user_id === meId,
+      comments: visibleComments(rows, meId, m.user_id).map((r) => commentJson(r, meId)),
+    });
+  }
   const owner = m.user_id === meId;
-  const rows = await all(
-    `SELECT c.*, u.name, u.handle FROM comments c JOIN users u ON u.id = c.author_id
-      WHERE c.moment_id = ? ${owner ? '' : 'AND c.author_id = ?'}
-      ORDER BY c.created_at`,
-    ...(owner ? [m.id] : [m.id, meId]),
-  );
-  return c.json(rows.map((r) => ({
-    id: r.id, text: r.text, createdAt: iso(r.created_at),
-    author: { id: r.author_id, name: r.name, handle: r.handle },
-    reply: r.reply ?? null, repliedAt: iso(r.replied_at),
-  })));
+  const tops = rows.filter((r) => !r.parent_id && r.author_id !== m.user_id && (owner || r.author_id === meId));
+  return c.json(tops.map((r) => {
+    const reply = rows.filter((x) => x.parent_id === r.id && x.author_id === m.user_id).pop();
+    return {
+      id: r.id, text: r.text, createdAt: iso(r.created_at),
+      author: { id: r.author_id, name: r.name, handle: r.handle },
+      reply: reply?.text ?? null, repliedAt: iso(reply?.created_at),
+    };
+  }));
 });
 
-/** The photo's owner answers a perspective. One reply per comment, editable; only that friend sees it. */
+/**
+ * New comment. Body: { text, parentId?, visibility: 'owner' | 'circle' }.
+ * 'circle' from a friend waits for the owner's approval before others see it.
+ */
+priv.post('/moments/:id/comments', async (c) => {
+  const user = c.get('user');
+  const m = await one('SELECT * FROM moments WHERE id = ?', c.req.param('id'));
+  if (!(await canSee(user.id, m))) return bad(c, 'not_found', 404);
+  const b = await body(c);
+  const textValue = str(b.text, 500);
+  if (!textValue) return bad(c, 'text_required');
+  const rows = await loadComments(m);
+  let parent = null;
+  if (b.parentId) {
+    parent = rows.find((r) => r.id === String(b.parentId));
+    const visible = parent && visibleComments(rows, user.id, m.user_id).some((r) => r.id === parent.id);
+    if (!visible) return bad(c, 'parent_not_found', 404);
+  }
+  const isOwner = m.user_id === user.id;
+  const visibility = isOwner ? 'circle' : (VISIBILITIES.has(b.visibility) ? b.visibility : 'owner');
+  const status = !isOwner && visibility === 'circle' ? 'pending' : 'approved';
+  const id = newId();
+  const now = Date.now();
+  await run(
+    `INSERT INTO comments (id, moment_id, author_id, parent_id, text, visibility, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, m.id, user.id, parent?.id ?? null, textValue, visibility, status, now,
+  );
+  notifyNewComment(user, m, parent);
+  const row = await one('SELECT c.*, u.name, u.handle FROM comments c JOIN users u ON u.id = c.author_id WHERE c.id = ?', id);
+  return c.json(commentJson(row, user.id), 201);
+});
+
+/** Edit my own comment. Body: { text }. */
+priv.patch('/moments/:id/comments/:commentId', async (c) => {
+  const user = c.get('user');
+  const cm = await one('SELECT * FROM comments WHERE id = ? AND moment_id = ? AND author_id = ?',
+    c.req.param('commentId'), c.req.param('id'), user.id);
+  if (!cm) return bad(c, 'not_found', 404);
+  const textValue = str((await body(c)).text, 500);
+  if (!textValue) return bad(c, 'text_required');
+  await run('UPDATE comments SET text = ?, edited_at = ? WHERE id = ?', textValue, Date.now(), cm.id);
+  const row = await one('SELECT c.*, u.name, u.handle FROM comments c JOIN users u ON u.id = c.author_id WHERE c.id = ?', cm.id);
+  return c.json(commentJson(row, user.id));
+});
+
+/** The author or the photo's owner removes a comment (and the replies under it). */
+priv.delete('/moments/:id/comments/:commentId', async (c) => {
+  const user = c.get('user');
+  const m = await one('SELECT * FROM moments WHERE id = ?', c.req.param('id'));
+  const cm = m && await one('SELECT * FROM comments WHERE id = ? AND moment_id = ?', c.req.param('commentId'), m.id);
+  if (!cm || (cm.author_id !== user.id && m.user_id !== user.id)) return bad(c, 'not_found', 404);
+  const rows = await loadComments(m);
+  const doomed = new Set([cm.id]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const r of rows) if (r.parent_id && doomed.has(r.parent_id) && !doomed.has(r.id)) { doomed.add(r.id); grew = true; }
+  }
+  await run('DELETE FROM comments WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify([...doomed]));
+  return c.json({ ok: true, deleted: doomed.size });
+});
+
+/** Owner decides whether a comment meant for the circle is shown to it. Body: { approve: bool }. */
+priv.post('/moments/:id/comments/:commentId/approve', async (c) => {
+  const m = await ownMoment(c);
+  if (!m) return bad(c, 'not_found', 404);
+  const cm = await one("SELECT * FROM comments WHERE id = ? AND moment_id = ? AND visibility = 'circle'", c.req.param('commentId'), m.id);
+  if (!cm) return bad(c, 'not_found', 404);
+  const approve = (await body(c)).approve !== false;
+  await run('UPDATE comments SET status = ? WHERE id = ?', approve ? 'approved' : 'rejected', cm.id);
+  // An approved answer to someone's comment now reaches them.
+  if (approve && cm.status !== 'approved' && cm.parent_id) {
+    const parent = await one('SELECT * FROM comments WHERE id = ?', cm.parent_id);
+    const author = await one('SELECT * FROM users WHERE id = ?', cm.author_id);
+    if (parent && author && parent.author_id !== author.id && parent.author_id !== m.user_id) {
+      background(pushToUsers([parent.author_id], text(REPLY_TEXT, author.name), { type: 'comment_reply', momentId: m.id }));
+    }
+  }
+  return c.json({ ok: true, status: approve ? 'approved' : 'rejected' });
+});
+
+// Older apps: one perspective per friend + one reply from the owner.
+
+/** (old) The owner answers a perspective — edits their latest reply under it, or adds one. */
 priv.put('/moments/:id/comments/:commentId/reply', async (c) => {
+  const user = c.get('user');
   const m = await ownMoment(c);
   if (!m) return bad(c, 'not_found', 404);
   const cm = await one('SELECT * FROM comments WHERE id = ? AND moment_id = ?', c.req.param('commentId'), m.id);
   if (!cm) return bad(c, 'not_found', 404);
-  const text = str((await body(c)).text, 500);
-  if (!text) return bad(c, 'text_required');
+  const textValue = str((await body(c)).text, 500);
+  if (!textValue) return bad(c, 'text_required');
+  const existing = await one('SELECT * FROM comments WHERE parent_id = ? AND author_id = ? ORDER BY created_at DESC LIMIT 1', cm.id, m.user_id);
   const now = Date.now();
-  await run('UPDATE comments SET reply = ?, replied_at = COALESCE(replied_at, ?) WHERE id = ?', text, now, cm.id);
-  if (!cm.reply) notifyReply(c.get('user'), cm.author_id, m.id);
-  return c.json({ ok: true, reply: text, repliedAt: iso(cm.replied_at ?? now) });
+  if (existing) {
+    await run('UPDATE comments SET text = ?, edited_at = ? WHERE id = ?', textValue, now, existing.id);
+  } else {
+    await run(
+      `INSERT INTO comments (id, moment_id, author_id, parent_id, text, visibility, status, created_at)
+       VALUES (?, ?, ?, ?, ?, 'circle', 'approved', ?)`,
+      newId(), m.id, m.user_id, cm.id, textValue, now,
+    );
+    notifyNewComment(user, m, cm);
+  }
+  return c.json({ ok: true, reply: textValue, repliedAt: iso(existing?.created_at ?? now) });
 });
 
 priv.delete('/moments/:id/comments/:commentId/reply', async (c) => {
   const m = await ownMoment(c);
   if (!m) return bad(c, 'not_found', 404);
-  await run('UPDATE comments SET reply = NULL, replied_at = NULL WHERE id = ? AND moment_id = ?', c.req.param('commentId'), m.id);
+  await run('DELETE FROM comments WHERE parent_id = ? AND moment_id = ? AND author_id = ?', c.req.param('commentId'), m.id, m.user_id);
   return c.json({ ok: true });
 });
 
-/** "Send your perspective" — one per person per moment, editable. */
+/** (old) "Send your perspective": edits my latest private top-level comment, or adds one. */
 priv.put('/moments/:id/comment', async (c) => {
   const user = c.get('user');
   const m = await one('SELECT * FROM moments WHERE id = ?', c.req.param('id'));
-  if (!m || !(await canComment(user.id, m))) return bad(c, 'not_found', 404);
-  const text = str((await body(c)).text, 500);
-  if (!text) return bad(c, 'text_required');
-  const existed = await one('SELECT 1 FROM comments WHERE moment_id = ? AND author_id = ?', m.id, user.id);
-  // Editing keeps created_at, so the owner is told about a perspective only once.
-  await run(
-    `INSERT INTO comments (id, moment_id, author_id, text, created_at) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT (moment_id, author_id) DO UPDATE SET text = excluded.text`,
-    newId(), m.id, user.id, text, Date.now(),
-  );
-  if (!existed) notifyComment(user, m.user_id, m.id);
-  return c.json({ ok: true, text });
+  if (!m || m.user_id === user.id || !(await canSee(user.id, m))) return bad(c, 'not_found', 404);
+  const textValue = str((await body(c)).text, 500);
+  if (!textValue) return bad(c, 'text_required');
+  const existing = await one(
+    'SELECT * FROM comments WHERE moment_id = ? AND author_id = ? AND parent_id IS NULL ORDER BY created_at DESC LIMIT 1', m.id, user.id);
+  if (existing) {
+    await run('UPDATE comments SET text = ?, edited_at = ? WHERE id = ?', textValue, Date.now(), existing.id);
+  } else {
+    await run(
+      `INSERT INTO comments (id, moment_id, author_id, parent_id, text, visibility, status, created_at)
+       VALUES (?, ?, ?, NULL, ?, 'owner', 'approved', ?)`,
+      newId(), m.id, user.id, textValue, Date.now(),
+    );
+    notifyNewComment(user, m, null);
+  }
+  return c.json({ ok: true, text: textValue });
 });
 
+/** (old) Removes all my comments on a moment. */
 priv.delete('/moments/:id/comment', async (c) => {
-  await run('DELETE FROM comments WHERE moment_id = ? AND author_id = ?', c.req.param('id'), c.get('user').id);
+  const me = c.get('user').id;
+  const mine = await all('SELECT id FROM comments WHERE moment_id = ? AND author_id = ?', c.req.param('id'), me);
+  const ids = mine.map((r) => r.id);
+  if (ids.length) {
+    await run('DELETE FROM comments WHERE id IN (SELECT value FROM json_each(?)) OR parent_id IN (SELECT value FROM json_each(?))',
+      JSON.stringify(ids), JSON.stringify(ids));
+  }
   return c.json({ ok: true });
 });
 
 /**
- * New perspectives on my photos, replies to my perspectives and new friends since `since` (ms).
- * Android without Firebase polls this in the background.
+ * What happened since `since` (ms): comments on my photos, answers to my comments,
+ * new friends, and (v=2) friend requests. Android without Firebase polls this.
  */
 priv.get('/activity', async (c) => {
   const id = c.get('user').id;
   const since = Number(c.req.query('since')) || 0;
-  const user = (r) => ({ id: r.id, name: r.name, handle: r.handle });
+  const v2 = c.req.query('v') === '2';
+  const user = (r) => ({ id: r.uid, name: r.name, handle: r.handle });
+  const snippet = (s) => (s && s.length > 80 ? `${s.slice(0, 79)}…` : s);
   const comments = (await all(
-    `SELECT c.moment_id, c.created_at AS at, u.id, u.name, u.handle FROM comments c
+    `SELECT c.id AS cid, c.moment_id, c.created_at AS at, c.text, c.visibility, c.status, c.parent_id,
+            u.id AS uid, u.name, u.handle FROM comments c
        JOIN moments m ON m.id = c.moment_id JOIN users u ON u.id = c.author_id
       WHERE m.user_id = ? AND c.author_id <> ? AND c.created_at > ?
-      ORDER BY c.created_at DESC LIMIT 20`,
+      ORDER BY c.created_at DESC LIMIT 30`,
     id, id, since,
-  )).map((r) => ({ type: 'comment', momentId: r.moment_id, at: iso(r.at), user: user(r) }));
-  const replies = (await all(
-    `SELECT c.moment_id, c.replied_at AS at, u.id, u.name, u.handle FROM comments c
-       JOIN moments m ON m.id = c.moment_id JOIN users u ON u.id = m.user_id
-      WHERE c.author_id = ? AND c.replied_at > ?
-      ORDER BY c.replied_at DESC LIMIT 20`,
-    id, since,
-  )).map((r) => ({ type: 'comment_reply', momentId: r.moment_id, at: iso(r.at), user: user(r) }));
+  )).map((r) => ({
+    type: 'comment', momentId: r.moment_id, at: iso(r.at), user: user(r),
+    ...(v2 ? { commentId: r.cid, text: snippet(r.text), mine: true, pending: r.visibility === 'circle' && r.status === 'pending' } : {}),
+  }));
+  // Answers to my comments (from the owner, or from anyone who can see them).
+  const answers = await all(
+    `SELECT c.id AS cid, c.moment_id, c.created_at AS at, c.text, c.author_id, m.user_id AS owner_id,
+            u.id AS uid, u.name, u.handle FROM comments c
+       JOIN comments p ON p.id = c.parent_id
+       JOIN moments m ON m.id = c.moment_id JOIN users u ON u.id = c.author_id
+      WHERE p.author_id = ? AND c.author_id <> ? AND c.created_at > ? AND m.user_id <> ?
+        AND (c.author_id = m.user_id OR (c.visibility = 'circle' AND c.status = 'approved'))
+      ORDER BY c.created_at DESC LIMIT 30`,
+    id, id, since, id,
+  );
+  const replies = answers
+    .filter((r) => v2 || r.author_id === r.owner_id)
+    .map((r) => ({
+      type: 'comment_reply', momentId: r.moment_id, at: iso(r.at), user: user(r),
+      ...(v2 ? { commentId: r.cid, text: snippet(r.text), mine: false } : {}),
+    }));
   const friends = (await all(
-    `SELECT f.created_at AS at, u.id, u.name, u.handle FROM friendships f JOIN users u ON u.id = f.friend_id
+    `SELECT f.created_at AS at, u.id AS uid, u.name, u.handle FROM friendships f JOIN users u ON u.id = f.friend_id
       WHERE f.user_id = ? AND f.added_by = f.friend_id AND f.created_at > ?
       ORDER BY f.created_at DESC LIMIT 20`,
     id, since,
   )).map((r) => ({ type: 'friend_added', momentId: null, at: iso(r.at), user: user(r) }));
-  return c.json({ now: new Date().toISOString(), items: [...comments, ...replies, ...friends] });
+  const requests = v2 ? (await all(
+    `SELECT r.created_at AS at, u.id AS uid, u.name, u.handle FROM friend_requests r JOIN users u ON u.id = r.from_id
+      WHERE r.to_id = ? AND r.created_at > ? ORDER BY r.created_at DESC LIMIT 20`,
+    id, since,
+  )).map((r) => ({ type: 'friend_request', momentId: null, at: iso(r.at), user: user(r) })) : [];
+  const items = [...comments, ...replies, ...friends, ...requests].sort((a, b) => (a.at < b.at ? 1 : -1));
+  return c.json({ now: new Date().toISOString(), items });
 });
 
 api.route('/', priv);
@@ -584,39 +962,43 @@ const FRIEND_ADDED_TEXT = {
   vi: (name) => ({ title: 'SEELI', body: `${name} đã kết bạn với bạn.` }),
   ja: (name) => ({ title: 'SEELI', body: `${name}さんとつながりました。` }),
 };
+const FRIEND_REQUEST_TEXT = {
+  vi: (name) => ({ title: 'SEELI', body: `${name} muốn kết bạn với bạn.` }),
+  ja: (name) => ({ title: 'SEELI', body: `${name}さんからつながりリクエストが届きました。` }),
+};
 const COMMENT_TEXT = {
-  vi: (name) => ({ title: name, body: 'đã gửi góc nhìn về khoảnh khắc của bạn.' }),
-  ja: (name) => ({ title: name, body: 'さんがあなたの瞬間に視点を届けました。' }),
+  vi: (name) => ({ title: name, body: 'đã bình luận về khoảnh khắc của bạn.' }),
+  ja: (name) => ({ title: name, body: 'さんがあなたの瞬間にコメントしました。' }),
 };
 const REPLY_TEXT = {
-  vi: (name) => ({ title: name, body: 'đã trả lời cảm nhận của bạn.' }),
-  ja: (name) => ({ title: name, body: 'さんがあなたの視点に返信しました。' }),
+  vi: (name) => ({ title: name, body: 'đã trả lời bình luận của bạn.' }),
+  ja: (name) => ({ title: name, body: 'さんがあなたのコメントに返信しました。' }),
 };
 const text = (table, name) => (lang) => (table[lang] || table.vi)(name);
 
-/** Tells someone that a person scanned their code and they are now friends. */
+/** Tells someone that a person connected with them. */
 const notifyFriendAdded = (adder, friendId) =>
   background(pushToUsers([friendId], text(FRIEND_ADDED_TEXT, adder.name), { type: 'friend_added', friendId: adder.id }));
 
-/** Tells a photo's owner a friend sent a perspective on it. */
-const notifyComment = (author, ownerId, momentId) =>
-  background(pushToUsers([ownerId], text(COMMENT_TEXT, author.name), { type: 'comment', momentId }));
+const notifyFriendRequest = (from, toId) =>
+  background(pushToUsers([toId], text(FRIEND_REQUEST_TEXT, from.name), { type: 'friend_request', friendId: from.id }));
 
-/** Tells a friend the photo's owner answered their perspective. */
-const notifyReply = (owner, commenterId, momentId) =>
-  background(pushToUsers([commenterId], text(REPLY_TEXT, owner.name), { type: 'comment_reply', momentId }));
+/** A new comment: tell the photo's owner, and the author of the comment it answers. */
+const notifyNewComment = (author, m, parent, { visibleToParent } = {}) => {
+  // The parent's author hears about it only once they can see it (owner's answer, or approved).
+  const seen = visibleToParent ?? author.id === m.user_id;
+  if (parent && parent.author_id !== author.id && seen) {
+    background(pushToUsers([parent.author_id], text(REPLY_TEXT, author.name), { type: 'comment_reply', momentId: m.id }));
+  }
+  if (m.user_id !== author.id && parent?.author_id !== m.user_id) {
+    background(pushToUsers([m.user_id], text(COMMENT_TEXT, author.name), { type: 'comment', momentId: m.id }));
+  }
+};
 
-/** Tells friends (not blocked either way) that someone shared to their circle. */
-const notifyCircle = (author, momentId) => background((async () => {
-  const friends = (await all(
-    `SELECT f.friend_id AS id FROM friendships f
-      WHERE f.user_id = ?
-        AND EXISTS (SELECT 1 FROM friendships r WHERE r.user_id = f.friend_id AND r.friend_id = f.user_id)
-        AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.user_id = f.friend_id AND b.blocked_id = ?)
-                                                  OR (b.user_id = ? AND b.blocked_id = f.friend_id))`,
-    author.id, author.id, author.id,
-  )).map((r) => r.id);
-  await pushToUsers(friends, text(FRIEND_POST_TEXT, author.name), { type: 'friend_post', momentId });
+/** Tells everyone who can see a new post. */
+const notifyNewPost = (author, m) => background((async () => {
+  const ids = await audienceOf(m);
+  if (ids.length) await pushToUsers(ids, text(FRIEND_POST_TEXT, author.name), { type: 'friend_post', momentId: m.id });
 })());
 
 /** Removes the account, every row that belongs to it (FK cascade) and its photos. */
@@ -646,22 +1028,18 @@ async function deletePhotos(prefix) {
   } while (cursor);
 }
 
-async function canComment(userId, m) {
-  return m.audience === 'circle' && await areFriends(userId, m.user_id) && !(await isBlockedEitherWay(userId, m.user_id));
-}
-
 const ownMoment = (c) => one('SELECT * FROM moments WHERE id = ? AND user_id = ?', c.req.param('id'), c.get('user').id);
 
 const UNFRIEND = 'DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)';
 const unfriendParams = (a, b) => [a, b, b, a];
 
 function friendRow(r) {
-  return { id: r.id, name: r.name, handle: r.handle, bio: r.bio, memo: r.memo, connectedAt: iso(r.created_at) };
+  return { id: r.id, name: r.name, handle: r.handle, bio: r.bio, memo: r.memo, close: !!r.close, connectedAt: iso(r.created_at) };
 }
 
 async function friendJson(meId, friendId) {
   return friendRow(await one(
-    `SELECT u.id, u.name, u.handle, u.bio, f.memo, f.created_at
+    `SELECT u.id, u.name, u.handle, u.bio, f.memo, f.close, f.created_at
        FROM friendships f JOIN users u ON u.id = f.friend_id WHERE f.user_id = ? AND f.friend_id = ?`,
     meId, friendId,
   ));

@@ -1,4 +1,4 @@
--- SEELI D1 schema (same as the old SQLite database after all migrations).
+-- SEELI D1 schema: the current state after every file in migrations/.
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS friendships (
   friend_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   memo TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL, added_by TEXT,
+  close INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, friend_id)
 );
 CREATE TABLE IF NOT EXISTS blocks (
@@ -46,9 +47,12 @@ CREATE TABLE IF NOT EXISTS comments (
   id TEXT PRIMARY KEY,
   moment_id TEXT NOT NULL REFERENCES moments(id) ON DELETE CASCADE,
   author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  parent_id TEXT,
   text TEXT NOT NULL,
-  created_at INTEGER NOT NULL, reply TEXT, replied_at INTEGER,
-  UNIQUE (moment_id, author_id)
+  visibility TEXT NOT NULL DEFAULT 'owner',  -- 'owner' | 'circle'
+  status TEXT NOT NULL DEFAULT 'approved',   -- 'pending' | 'approved' | 'rejected' (for 'circle')
+  created_at INTEGER NOT NULL,
+  edited_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS admin_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,3 +86,19 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 CREATE INDEX IF NOT EXISTS moments_user ON moments(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS identities_user ON identities(user_id);
 CREATE INDEX IF NOT EXISTS device_tokens_user ON device_tokens(user_id);
+CREATE INDEX IF NOT EXISTS comments_moment ON comments(moment_id, created_at);
+CREATE INDEX IF NOT EXISTS comments_author ON comments(author_id, created_at);
+CREATE INDEX IF NOT EXISTS comments_parent ON comments(parent_id);
+CREATE TABLE IF NOT EXISTS moment_recipients (
+  moment_id TEXT NOT NULL REFERENCES moments(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (moment_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS moment_recipients_user ON moment_recipients(user_id);
+CREATE TABLE IF NOT EXISTS friend_requests (
+  from_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (from_id, to_id)
+);
+CREATE INDEX IF NOT EXISTS friend_requests_to ON friend_requests(to_id, created_at);

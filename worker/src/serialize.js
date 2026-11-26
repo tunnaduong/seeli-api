@@ -22,11 +22,26 @@ export function photoUrl(m, baseUrl) {
   return `${baseUrl}/v1/photos/${m.id}?exp=${exp}&sig=${photoSignature(m.id, exp)}`;
 }
 
+/** Older apps only know onlyMe / circle: anything shared with friends reads as circle to them. */
+const legacyAudience = (a) => (a === 'onlyMe' ? 'onlyMe' : 'circle');
+
+const parseIds = (json) => {
+  try {
+    const ids = JSON.parse(json || '[]');
+    return Array.isArray(ids) ? ids.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+};
+
 export const myMoment = (m, baseUrl) => ({
   id: m.id,
   note: m.note,
   placeName: m.place_name,
-  audience: m.audience,
+  audience: legacyAudience(m.audience),
+  share: { audience: m.audience, recipientIds: parseIds(m.recipient_ids) },
+  pendingCount: m.pending_count ?? 0,
+  lastCommentAt: iso(m.last_comment_at),
   createdAt: iso(m.created_at),
   revealAt: iso(m.reveal_at),
   reunitedAt: iso(m.reunited_at),
@@ -50,5 +65,9 @@ export const feedMoment = (m) => ({
   myComment: m.my_comment ?? null,
   myCommentReply: m.my_comment_reply ?? null,
   myCommentRepliedAt: iso(m.my_comment_replied_at),
+  commentCount: m.comment_count ?? 0,
+  myCommentCount: m.my_comment_count ?? 0,
+  repliesToMe: m.replies_to_me ?? 0,
+  lastActivityAt: iso(m.last_activity_at),
   scene: parseInt(m.id.slice(0, 6), 16) % 3,
 });
