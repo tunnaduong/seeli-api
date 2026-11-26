@@ -99,6 +99,10 @@ test('full SEELI flow', async () => {
   assert.equal((await call('PUT', `/moments/${post.json.id}/comments/${cm.id}/reply`, { token: ta, body: { text: 'no' } })).status, 404);
   assert.equal((await call('PUT', `/moments/${post.json.id}/comments/${cm.id}/reply`, { token: tb, body: { text: 'ありがとう' } })).status, 200);
   assert.equal((await call('GET', `/moments/${post.json.id}/comments`, { token: tb })).json[0].reply, 'ありがとう');
+  const act = (await call('GET', '/activity?since=0', { token: tb })).json;
+  assert.deepEqual(act.items.map((i) => i.type), ['comment']);
+  assert.equal((await call('GET', '/activity?since=0', { token: ta })).json.items[0].type, 'comment_reply');
+  assert.equal((await call('GET', `/activity?since=${Date.now() + 1000}`, { token: tb })).json.items.length, 0);
   const fed = (await call('GET', '/feed', { token: ta })).json[0];
   assert.equal(fed.myCommentReply, 'ありがとう');
   assert.ok(fed.myCommentRepliedAt);

@@ -453,9 +453,9 @@ export default async function routes(app) {
       const text = str(req.body?.text, 500);
       if (!text) return bad(reply, 'text_required');
       const now = Date.now();
-      run('UPDATE comments SET reply = ?, replied_at = ? WHERE id = ?', text, now, c.id);
+      run('UPDATE comments SET reply = ?, replied_at = COALESCE(replied_at, ?) WHERE id = ?', text, now, c.id);
       if (!c.reply) notifyReply(req.user, c.author_id, m.id, req.log);
-      return { ok: true, reply: text, repliedAt: iso(now) };
+      return { ok: true, reply: text, repliedAt: iso(c.replied_at ?? now) };
     });
 
     priv.delete('/moments/:id/comments/:commentId/reply', async (req, reply) => {
@@ -471,12 +471,38 @@ export default async function routes(app) {
       if (!m || !canComment(req.user.id, m)) return bad(reply, 'not_found', 404);
       const text = str(req.body?.text, 500);
       if (!text) return bad(reply, 'text_required');
+      const existed = one('SELECT 1 FROM comments WHERE moment_id = ? AND author_id = ?', m.id, req.user.id);
+      // Editing keeps created_at, so the owner is told about a perspective only once.
       run(
         `INSERT INTO comments (id, moment_id, author_id, text, created_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (moment_id, author_id) DO UPDATE SET text = excluded.text, created_at = excluded.created_at`,
+         ON CONFLICT (moment_id, author_id) DO UPDATE SET text = excluded.text`,
         newId(), m.id, req.user.id, text, Date.now(),
       );
+      if (!existed) notifyComment(req.user, m.user_id, m.id, req.log);
       return { ok: true, text };
+    });
+
+    /**
+     * New perspectives on my photos and new replies to my perspectives since `since` (ms).
+     * Android has no push service here, so it polls this in the background.
+     */
+    priv.get('/activity', async (req) => {
+      const since = Number(req.query?.since) || 0;
+      const comments = all(
+        `SELECT c.moment_id, c.created_at AS at, u.id, u.name, u.handle FROM comments c
+           JOIN moments m ON m.id = c.moment_id JOIN users u ON u.id = c.author_id
+          WHERE m.user_id = ? AND c.author_id <> ? AND c.created_at > ?
+          ORDER BY c.created_at DESC LIMIT 20`,
+        req.user.id, req.user.id, since,
+      ).map((r) => ({ type: 'comment', momentId: r.moment_id, at: iso(r.at), user: { id: r.id, name: r.name, handle: r.handle } }));
+      const replies = all(
+        `SELECT c.moment_id, c.replied_at AS at, u.id, u.name, u.handle FROM comments c
+           JOIN moments m ON m.id = c.moment_id JOIN users u ON u.id = m.user_id
+          WHERE c.author_id = ? AND c.replied_at > ?
+          ORDER BY c.replied_at DESC LIMIT 20`,
+        req.user.id, since,
+      ).map((r) => ({ type: 'comment_reply', momentId: r.moment_id, at: iso(r.at), user: { id: r.id, name: r.name, handle: r.handle } }));
+      return { now: new Date().toISOString(), items: [...comments, ...replies] };
     });
 
     priv.delete('/moments/:id/comment', async (req) => {
@@ -507,9 +533,20 @@ const FRIEND_POST_TEXT = {
 };
 
 /** Tells friends (not blocked either way) that someone shared to their circle. Fire and forget. */
+const COMMENT_TEXT = {
+  vi: (name) => ({ title: name, body: 'đã gửi góc nhìn về khoảnh khắc của bạn.' }),
+  ja: (name) => ({ title: name, body: 'さんがあなたの瞬間に視点を届けました。' }),
+};
+
+/** Tells a photo's owner a friend sent a perspective on it. */
+function notifyComment(author, ownerId, momentId, log) {
+  pushToUsers([ownerId], (lang) => (COMMENT_TEXT[lang] || COMMENT_TEXT.vi)(author.name),
+    { type: 'comment', momentId }, log).catch(() => {});
+}
+
 const REPLY_TEXT = {
   vi: (name) => ({ title: name, body: 'đã trả lời cảm nhận của bạn.' }),
-  ja: (name) => ({ title: name, body: 'さんがあなたの感想に返信しました。' }),
+  ja: (name) => ({ title: name, body: 'さんがあなたの視点に返信しました。' }),
 };
 
 /** Tells a friend the photo's owner answered their perspective. */
