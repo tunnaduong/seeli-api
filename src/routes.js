@@ -191,19 +191,23 @@ export default async function routes(app) {
     /** Sign out everywhere. */
     /** Registers this device for push. env: "sandbox" (debug builds) or "production". */
     priv.put('/me/device', async (req, reply) => {
-      const token = String(req.body?.token || '');
-      if (!/^[0-9a-f]{64,200}$/i.test(token)) return bad(reply, 'invalid_token');
+      const android = req.body?.platform === 'android';
+      let token = String(req.body?.token || '');
+      // APNs: hex device token. FCM: opaque registration token.
+      if (android ? !/^[\w:.-]{20,4096}$/.test(token) : !/^[0-9a-f]{64,200}$/i.test(token)) return bad(reply, 'invalid_token');
+      if (!android) token = token.toLowerCase();
       const env = req.body?.env === 'sandbox' ? 'sandbox' : 'production';
       const lang = req.body?.lang === 'ja' ? 'ja' : 'vi';
-      run(`INSERT INTO device_tokens (token, user_id, env, lang, updated_at) VALUES (?, ?, ?, ?, ?)
+      run(`INSERT INTO device_tokens (token, user_id, env, lang, platform, updated_at) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT (token) DO UPDATE SET user_id = excluded.user_id, env = excluded.env,
-             lang = excluded.lang, updated_at = excluded.updated_at`,
-      token.toLowerCase(), req.user.id, env, lang, Date.now());
+             lang = excluded.lang, platform = excluded.platform, updated_at = excluded.updated_at`,
+      token, req.user.id, env, lang, android ? 'android' : 'ios', Date.now());
       return { ok: true };
     });
 
     priv.delete('/me/device', async (req) => {
-      run('DELETE FROM device_tokens WHERE token = ? AND user_id = ?', String(req.body?.token || '').toLowerCase(), req.user.id);
+      const t = String(req.body?.token || '');
+      run('DELETE FROM device_tokens WHERE token IN (?, ?) AND user_id = ?', t, t.toLowerCase(), req.user.id);
       return { ok: true };
     });
 

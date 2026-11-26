@@ -3,6 +3,7 @@ import { createPrivateKey, sign } from 'node:crypto';
 import http2 from 'node:http2';
 import { config } from './config.js';
 import { all, run } from './db.js';
+import { fcmConfigured, sendFcm } from './fcm.js';
 
 const HOSTS = { production: 'https://api.push.apple.com', sandbox: 'https://api.sandbox.push.apple.com' };
 const teamId = () => process.env.APNS_TEAM_ID || config.appleTeamId;
@@ -44,18 +45,27 @@ function sendHttp2(env, token, headers, payload) {
 }
 
 /**
- * Sends one alert to every device of the given users. `message(lang)` returns { title, body }.
- * Tokens Apple reports as dead are removed. Never throws.
+ * Sends one alert to every device of the given users: APNs for iPhones, FCM for Android.
+ * `message(lang)` returns { title, body }. Tokens reported as dead are removed. Never throws.
  */
 export async function pushToUsers(userIds, message, data = {}, log = null) {
-  if (!apnsConfigured() || userIds.length === 0) return 0;
+  const ios = apnsConfigured(), android = fcmConfigured();
+  if ((!ios && !android) || userIds.length === 0) return 0;
   const rows = all(
-    `SELECT token, env, lang FROM device_tokens WHERE user_id IN (${userIds.map(() => '?').join(',')})`,
+    `SELECT token, env, lang, platform FROM device_tokens WHERE user_id IN (${userIds.map(() => '?').join(',')})`,
     ...userIds,
   );
   let sent = 0;
   await Promise.all(rows.map(async (r) => {
     try {
+      if (r.platform === 'android') {
+        if (!android) return;
+        const result = await sendFcm(r.token, message(r.lang), data, log);
+        if (result === 'sent') sent++;
+        else if (result === 'dead') run('DELETE FROM device_tokens WHERE token = ?', r.token);
+        return;
+      }
+      if (!ios) return;
       const { title, body } = message(r.lang);
       const res = await sender(r.env, r.token, {
         authorization: `bearer ${providerToken()}`,

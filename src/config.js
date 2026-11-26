@@ -33,6 +33,8 @@ export const config = {
   apnsKeyId: process.env.APNS_KEY_ID || '',
   apnsKeyPath: process.env.APNS_KEY_PATH || '',
   apnsTopic: process.env.APNS_TOPIC || 'com.tunnaduong.seeli',
+  // Firebase service-account JSON for Android push (FCM HTTP v1).
+  fcmServiceAccountPath: process.env.FCM_SERVICE_ACCOUNT_PATH || '',
   // Google Sign-In: OAuth client IDs (iOS client) whose ID tokens we accept. Empty = Google login disabled.
   googleClientIds: (process.env.GOOGLE_CLIENT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
   // Auth attempts per IP per minute.

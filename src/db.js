@@ -113,6 +113,9 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 CREATE INDEX IF NOT EXISTS device_tokens_user ON device_tokens(user_id);
 `);
 
+// 'ios' (APNs) or 'android' (FCM).
+if (!hasColumn('device_tokens', 'platform')) db.exec("ALTER TABLE device_tokens ADD COLUMN platform TEXT NOT NULL DEFAULT 'ios'");
+
 // A friend may open someone else's photo exactly once.
 db.exec(`
 CREATE TABLE IF NOT EXISTS photo_views (

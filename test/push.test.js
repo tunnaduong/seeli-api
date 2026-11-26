@@ -8,14 +8,21 @@ import { generateKeyPairSync, verify } from 'node:crypto';
 const dir = mkdtempSync(join(tmpdir(), 'seeli-push-'));
 const ec = generateKeyPairSync('ec', { namedCurve: 'P-256' });
 writeFileSync(join(dir, 'apns.p8'), ec.privateKey.export({ type: 'pkcs8', format: 'pem' }));
+const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
+writeFileSync(join(dir, 'firebase.json'), JSON.stringify({
+  project_id: 'seeli-test', client_email: 'push@seeli-test.iam.gserviceaccount.com', private_key_id: 'k1',
+  private_key: rsa.privateKey.export({ type: 'pkcs8', format: 'pem' }), token_uri: 'https://oauth2.example/token',
+}));
 Object.assign(process.env, {
   DATA_DIR: dir, AUTH_RATE_LIMIT: '1000',
   APPLE_TEAM_ID: 'TEAM123', APNS_KEY_ID: 'PUSHKEY', APNS_KEY_PATH: join(dir, 'apns.p8'),
+  FCM_SERVICE_ACCOUNT_PATH: join(dir, 'firebase.json'),
 });
 
 const { buildApp } = await import('../src/server.js');
 const { _setSenderForTest } = await import('../src/apns.js');
 const { all } = await import('../src/db.js');
+const { _setFcmForTest } = await import('../src/fcm.js');
 const app = buildApp({ logger: false });
 
 const sent = [];
@@ -26,6 +33,23 @@ _setSenderForTest(async (env, token, headers, payload) => {
   assert.ok(verify('sha256', Buffer.from(`${h}.${b}`), { key: ec.publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(s, 'base64url')));
   sent.push({ env, token, payload });
   return token.startsWith('dead') ? { status: 410, body: '{"reason":"Unregistered"}' } : { status: 200 };
+});
+
+const fcmSent = [];
+_setFcmForTest({
+  fetchToken: async (uri, assertion) => {
+    const [h, b, sig] = assertion.split('.');
+    assert.equal(uri, 'https://oauth2.example/token');
+    assert.equal(JSON.parse(Buffer.from(b, 'base64url')).scope, 'https://www.googleapis.com/auth/firebase.messaging');
+    assert.ok(verify('RSA-SHA256', Buffer.from(`${h}.${b}`), rsa.publicKey, Buffer.from(sig, 'base64url')));
+    return { access_token: 'ya29.test', expires_in: 3600 };
+  },
+  send: async (project, bearer, message) => {
+    assert.equal(project, 'seeli-test');
+    assert.equal(bearer, 'ya29.test');
+    fcmSent.push(message);
+    return message.token.startsWith('gone') ? { status: 404, body: '{"error":{"status":"NOT_FOUND","details":[{"errorCode":"UNREGISTERED"}]}}' } : { status: 200, body: '{}' };
+  },
 });
 
 const call = async (method, url, token, body) => {
@@ -72,4 +96,24 @@ test('friends get a push when someone shares to the circle', async () => {
 
   await call('POST', '/auth/logout', b.token);
   assert.equal(all('SELECT * FROM device_tokens WHERE token = ?', tokB).length, 0);
+});
+
+test('Android devices get the same pushes through FCM', async () => {
+  const signup = (n) => call('POST', '/auth/signup', undefined, { name: n, handle: n, email: `${n}@seeli.test`, password: 'password123' });
+  const d = (await signup('dung')).json, e = (await signup('em')).json;
+  const fcmTok = 'fcm:APA91b' + 'x'.repeat(140), gone = 'gone:' + 'y'.repeat(140);
+  assert.equal((await call('PUT', '/me/device', e.token, { token: fcmTok, platform: 'android', lang: 'vi' })).status, 200);
+  await call('PUT', '/me/device', e.token, { token: gone, platform: 'android' });
+  assert.equal((await call('PUT', '/me/device', e.token, { token: 'bad token!', platform: 'android' })).status, 400);
+
+  // d scans e's code → e is told, through FCM, as a data message
+  await call('POST', '/friends', d.token, { code: e.user.inviteCode });
+  await tick();
+  const added = fcmSent.find((m) => m.token === fcmTok);
+  assert.equal(added.data.type, 'friend_added');
+  assert.equal(added.data.friendId, d.user.id);
+  assert.match(added.data.body, /dung đã kết bạn/);
+  assert.equal(added.android.priority, 'high');
+  assert.equal(all('SELECT * FROM device_tokens WHERE token = ?', gone).length, 0); // unregistered token removed
+  assert.equal(all('SELECT platform FROM device_tokens WHERE token = ?', fcmTok)[0].platform, 'android');
 });
