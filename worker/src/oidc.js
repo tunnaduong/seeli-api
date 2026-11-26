@@ -20,12 +20,54 @@ const PROVIDERS = {
 
 const keyCache = new Map(); // provider -> { at, keys: Map(kid -> KeyObject) }
 
+const KEY_TTL = 6 * 3600_000;
+
+/** Fetch with short per-try timeouts: some requests from Cloudflare to the provider hang. */
+async function fetchJwks(url) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(2500) });
+      if (!res.ok) throw new Error(`jwks_${res.status}`);
+      const text = await res.text();
+      JSON.parse(text); // must be valid before caching
+      return text;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
+/** Colo-wide cache, so a fresh isolate rarely needs to reach the provider. */
+const edgeCache = () => (typeof caches !== 'undefined' ? caches.default : null);
+
 async function keysFor(provider, { refresh = false } = {}) {
   const cached = keyCache.get(provider);
-  if (!refresh && cached && Date.now() - cached.at < 6 * 3600_000) return cached.keys;
-  const res = await fetch(PROVIDERS[provider].jwks, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) throw new Error(`jwks_${res.status}`);
-  const { keys } = await res.json();
+  if (!refresh && cached && Date.now() - cached.at < KEY_TTL) return cached.keys;
+  const url = PROVIDERS[provider].jwks;
+  const cache = edgeCache();
+
+  let text = null;
+  if (!refresh && cache) {
+    const hit = await cache.match(url).catch(() => null);
+    if (hit) text = await hit.text();
+  }
+  if (!text) {
+    try {
+      text = await fetchJwks(url);
+      if (cache) {
+        await cache.put(url, new Response(text, {
+          headers: { 'content-type': 'application/json', 'cache-control': `max-age=${KEY_TTL / 1000}` },
+        })).catch(() => {});
+      }
+    } catch (e) {
+      // Provider unreachable right now: keep using the keys we already have.
+      if (cached) return cached.keys;
+      throw e;
+    }
+  }
+  const { keys } = JSON.parse(text);
   const map = new Map(keys.map((jwk) => [jwk.kid, createPublicKey({ key: jwk, format: 'jwk' })]));
   keyCache.set(provider, { at: Date.now(), keys: map });
   return map;
