@@ -55,6 +55,10 @@ test('full SEELI flow', async () => {
   const preview = await call('GET', `/invites/${b.json.user.inviteCode}`, { token: ta });
   assert.equal(preview.json.user.handle, 'mika');
   assert.equal((await call('POST', '/friends', { token: ta, body: { code: b.json.user.inviteCode } })).status, 201);
+  // Only the person whose code was scanned hears "X added you"
+  assert.deepEqual((await call('GET', '/activity?since=0', { token: tb })).json.items.map((i) => [i.type, i.user.id]),
+    [['friend_added', a.json.user.id]]);
+  assert.equal((await call('GET', '/activity?since=0', { token: ta })).json.items.length, 0);
   assert.equal((await call('GET', '/friends', { token: tb })).json.length, 1);
   await call('PATCH', `/friends/${b.json.user.id}`, { token: ta, body: { memo: 'met at uni' } });
   assert.equal((await call('GET', '/friends', { token: ta })).json[0].memo, 'met at uni');
@@ -100,7 +104,7 @@ test('full SEELI flow', async () => {
   assert.equal((await call('PUT', `/moments/${post.json.id}/comments/${cm.id}/reply`, { token: tb, body: { text: 'ありがとう' } })).status, 200);
   assert.equal((await call('GET', `/moments/${post.json.id}/comments`, { token: tb })).json[0].reply, 'ありがとう');
   const act = (await call('GET', '/activity?since=0', { token: tb })).json;
-  assert.deepEqual(act.items.map((i) => i.type), ['comment']);
+  assert.deepEqual(act.items.map((i) => i.type), ['comment', 'friend_added']);
   assert.equal((await call('GET', '/activity?since=0', { token: ta })).json.items[0].type, 'comment_reply');
   assert.equal((await call('GET', `/activity?since=${Date.now() + 1000}`, { token: tb })).json.items.length, 0);
   const fed = (await call('GET', '/feed', { token: ta })).json[0];

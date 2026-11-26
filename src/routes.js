@@ -245,10 +245,12 @@ export default async function routes(app) {
       if (!u || isBlockedEitherWay(req.user.id, u.id)) return bad(reply, 'not_found', 404);
       if (u.id === req.user.id) return bad(reply, 'self');
       const now = Date.now();
+      const isNew = !areFriends(req.user.id, u.id);
       tx(() => {
-        run('INSERT OR IGNORE INTO friendships (user_id, friend_id, created_at) VALUES (?, ?, ?)', req.user.id, u.id, now);
-        run('INSERT OR IGNORE INTO friendships (user_id, friend_id, created_at) VALUES (?, ?, ?)', u.id, req.user.id, now);
+        run('INSERT OR IGNORE INTO friendships (user_id, friend_id, created_at, added_by) VALUES (?, ?, ?, ?)', req.user.id, u.id, now, req.user.id);
+        run('INSERT OR IGNORE INTO friendships (user_id, friend_id, created_at, added_by) VALUES (?, ?, ?, ?)', u.id, req.user.id, now, req.user.id);
       });
+      if (isNew) notifyFriendAdded(req.user, u.id, req.log);
       return reply.code(201).send(friendJson(req.user.id, u.id));
     });
 
@@ -502,7 +504,13 @@ export default async function routes(app) {
           ORDER BY c.replied_at DESC LIMIT 20`,
         req.user.id, since,
       ).map((r) => ({ type: 'comment_reply', momentId: r.moment_id, at: iso(r.at), user: { id: r.id, name: r.name, handle: r.handle } }));
-      return { now: new Date().toISOString(), items: [...comments, ...replies] };
+      const friends = all(
+        `SELECT f.created_at AS at, u.id, u.name, u.handle FROM friendships f JOIN users u ON u.id = f.friend_id
+          WHERE f.user_id = ? AND f.added_by = f.friend_id AND f.created_at > ?
+          ORDER BY f.created_at DESC LIMIT 20`,
+        req.user.id, since,
+      ).map((r) => ({ type: 'friend_added', momentId: null, at: iso(r.at), user: { id: r.id, name: r.name, handle: r.handle } }));
+      return { now: new Date().toISOString(), items: [...comments, ...replies, ...friends] };
     });
 
     priv.delete('/moments/:id/comment', async (req) => {
@@ -533,6 +541,17 @@ const FRIEND_POST_TEXT = {
 };
 
 /** Tells friends (not blocked either way) that someone shared to their circle. Fire and forget. */
+const FRIEND_ADDED_TEXT = {
+  vi: (name) => ({ title: 'SEELI', body: `${name} đã kết bạn với bạn.` }),
+  ja: (name) => ({ title: 'SEELI', body: `${name}さんとつながりました。` }),
+};
+
+/** Tells someone that a person scanned their code and they are now friends. */
+function notifyFriendAdded(adder, friendId, log) {
+  pushToUsers([friendId], (lang) => (FRIEND_ADDED_TEXT[lang] || FRIEND_ADDED_TEXT.vi)(adder.name),
+    { type: 'friend_added', friendId: adder.id }, log).catch(() => {});
+}
+
 const COMMENT_TEXT = {
   vi: (name) => ({ title: name, body: 'đã gửi góc nhìn về khoảnh khắc của bạn.' }),
   ja: (name) => ({ title: name, body: 'さんがあなたの瞬間に視点を届けました。' }),

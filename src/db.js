@@ -76,6 +76,8 @@ if (!hasColumn('comments', 'replied_at')) db.exec('ALTER TABLE comments ADD COLU
 if (!hasColumn('blocks', 'friend_since')) db.exec('ALTER TABLE blocks ADD COLUMN friend_since INTEGER');
 if (!hasColumn('blocks', 'memo')) db.exec('ALTER TABLE blocks ADD COLUMN memo TEXT');
 if (!hasColumn('blocks', 'their_memo')) db.exec('ALTER TABLE blocks ADD COLUMN their_memo TEXT');
+// Who scanned whose code, so only the other person is told "X added you".
+if (!hasColumn('friendships', 'added_by')) db.exec('ALTER TABLE friendships ADD COLUMN added_by TEXT');
 if (!hasColumn('reports', 'resolved_at')) db.exec('ALTER TABLE reports ADD COLUMN resolved_at INTEGER');
 db.exec(`
 CREATE TABLE IF NOT EXISTS identities (
