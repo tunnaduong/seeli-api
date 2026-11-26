@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "seeli-api",
+  "main": "src/index.js",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
+  "vars": {
+    "PUBLIC_URL": "https://seeli-api.tunnaduong.com",
+    "REVEAL_MIN_DAYS": "27",
+    "REVEAL_MAX_DAYS": "37",
+    "ALLOW_DEMO": "true",
+    "MAX_PHOTO_MB": "8",
+    "APPLE_AUDIENCES": "com.tunnaduong.seeli",
+    "APPLE_TEAM_ID": "62H5L8QDTS",
+    "PUSH_RELAY_URL": "https://seeli-push.tunnaduong.com"
+  },
+  // Secrets (wrangler secret put): JWT_SECRET, ADMIN_PASSWORD, APPLE_KEY_ID, APPLE_KEY,
+  // GOOGLE_CLIENT_IDS, FCM_SERVICE_ACCOUNT, PUSH_RELAY_SECRET.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "seeli", "database_id": "00000000-0000-0000-0000-000000000000" }
+  ],
+  "r2_buckets": [
+    { "binding": "PHOTOS", "bucket_name": "seeli-photos" }
+  ]
+}

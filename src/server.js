@@ -3,6 +3,7 @@ import multipart from '@fastify/multipart';
 import { config } from './config.js';
 import routes from './routes.js';
 import adminRoutes from './admin.js';
+import relayRoutes from './relay.js';
 
 export function buildApp(opts = {}) {
   const app = Fastify({
@@ -10,9 +11,13 @@ export function buildApp(opts = {}) {
     trustProxy: true, // behind aaPanel's nginx
     bodyLimit: 1024 * 1024,
   });
-  app.register(multipart, { limits: { fileSize: config.maxPhotoBytes, files: 1, fields: 10 } });
-  app.register(routes, { prefix: '/v1' });
-  app.register(adminRoutes);
+  if (config.relayOnly) {
+    app.register(relayRoutes);
+  } else {
+    app.register(multipart, { limits: { fileSize: config.maxPhotoBytes, files: 1, fields: 10 } });
+    app.register(routes, { prefix: '/v1' });
+    app.register(adminRoutes);
+  }
   app.setErrorHandler((err, req, reply) => {
     if (err.code === 'FST_REQ_FILE_TOO_LARGE') return reply.code(413).send({ error: 'photo_too_large' });
     if (err.statusCode && err.statusCode < 500) return reply.code(err.statusCode).send({ error: err.code || 'bad_request' });

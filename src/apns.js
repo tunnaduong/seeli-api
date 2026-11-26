@@ -44,6 +44,16 @@ function sendHttp2(env, token, headers, payload) {
   });
 }
 
+/** One APNs request with our provider token. Used by the push relay for the Cloudflare Worker. */
+export function sendApns(env, token, payload) {
+  return sender(env, token, {
+    authorization: `bearer ${providerToken()}`,
+    'apns-topic': config.apnsTopic,
+    'apns-push-type': 'alert',
+    'apns-priority': '10',
+  }, payload);
+}
+
 /**
  * Sends one alert to every device of the given users: APNs for iPhones, FCM for Android.
  * `message(lang)` returns { title, body }. Tokens reported as dead are removed. Never throws.

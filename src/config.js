@@ -42,6 +42,9 @@ export const config = {
   // Admin page password (/admin). Empty = admin page disabled.
   adminPassword: process.env.ADMIN_PASSWORD || '',
   adminSessionHours: 12,
+  // Push relay mode: the API runs on Cloudflare; this server only forwards iPhone pushes to APNs.
+  relayOnly: process.env.RELAY_ONLY === 'true',
+  pushRelaySecret: process.env.PUSH_RELAY_SECRET || '',
   // Public base URL used in photo links (e.g. https://seeli-api.example.com).
   publicUrl: (process.env.PUBLIC_URL || '').replace(/\/$/, ''),
 };
