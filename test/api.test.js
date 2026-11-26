@@ -161,6 +161,13 @@ test('admin area', async () => {
   const v = await signup('Lan', 'lan');
   assert.equal((await admin('GET', '/stats', { cookie: `seeli_admin=${u.json.token}` })).status, 401);
 
+  // Reset one-time photo views (needs the admin cookie)
+  assert.equal((await admin('POST', '/photo-views/reset')).status, 401);
+  const reset = await admin('POST', '/photo-views/reset', { cookie });
+  assert.equal(reset.status, 200);
+  assert.equal(typeof reset.json.cleared, 'number');
+  assert.equal((await admin('GET', '/stats', { cookie })).json.photoViews, 0);
+
   const stats = await admin('GET', '/stats', { cookie });
   assert.equal(stats.status, 200);
   assert.ok(stats.json.users >= 2);

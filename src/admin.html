@@ -109,6 +109,14 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
       <div class="grid" id="stats"></div>
       <h2>Dung lượng ổ đĩa</h2>
       <div class="panel" style="padding:16px" id="disk"></div>
+      <h2>Let's Connect</h2>
+      <div class="panel" style="padding:16px;display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+        <div>
+          <div><b id="viewCount">–</b> lượt đã xem ảnh của bạn bè</div>
+          <div class="muted small">Ảnh của bạn bè chỉ xem được một lần. Đặt lại để mọi người xem lại mọi ảnh thêm một lần nữa.</div>
+        </div>
+        <button class="btn danger" id="resetViews">Cho xem lại tất cả ảnh</button>
+      </div>
       <h2>Thao tác gần đây</h2>
       <div class="panel"><ul class="log" id="log"></ul></div>
       <div class="note">Trang này chỉ hiện tài khoản, báo cáo và số liệu. Ảnh, lời ghi chú, địa điểm, bình luận và ghi chú riêng của người dùng không bao giờ hiện ở đây.</div>
@@ -159,7 +167,7 @@ const $ = (s) => document.querySelector(s);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtDate = (s) => s ? new Date(s).toLocaleString('vi-VN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 const fmtBytes = (b) => b == null ? '—' : b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.round(b / 1e3) + ' KB';
-const ACTIONS = { login: 'Đăng nhập trang quản trị', suspend: 'Khoá tài khoản', unsuspend: 'Mở khoá tài khoản', signout: 'Đăng xuất mọi thiết bị', delete: 'Xoá tài khoản', report_resolved: 'Đánh dấu báo cáo đã xử lý', report_dismissed: 'Bỏ qua báo cáo', report_open: 'Mở lại báo cáo' };
+const ACTIONS = { login: 'Đăng nhập trang quản trị', suspend: 'Khoá tài khoản', unsuspend: 'Mở khoá tài khoản', signout: 'Đăng xuất mọi thiết bị', delete: 'Xoá tài khoản', report_resolved: 'Đánh dấu báo cáo đã xử lý', report_dismissed: 'Bỏ qua báo cáo', report_open: 'Mở lại báo cáo', reset_views: 'Cho xem lại tất cả ảnh Let\'s Connect' };
 
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
@@ -213,6 +221,7 @@ async function loadOverview() {
   ];
   $('#stats').innerHTML = cards.map(([l, v, warn]) => `<div class="stat${warn ? ' warn' : ''}"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join('');
   setBadge(s.openReports);
+  $('#viewCount').textContent = s.photoViews;
 
   const used = s.diskTotalBytes - s.diskFreeBytes;
   const pct = s.diskTotalBytes ? Math.round((used / s.diskTotalBytes) * 100) : 0;
@@ -226,6 +235,15 @@ async function loadOverview() {
     ? s.recentActions.map((a) => `<li><span>${esc(ACTIONS[a.action] || a.action)} ${a.target ? `<b>${esc(a.target)}</b>` : ''}</span><span class="muted">${fmtDate(a.created_at)}</span></li>`).join('')
     : '<li class="muted">Chưa có thao tác nào.</li>';
 }
+
+$('#resetViews').addEventListener('click', async () => {
+  if (!confirm('Cho mọi người xem lại tất cả ảnh của bạn bè thêm một lần?\n\nMọi ảnh đã xem sẽ mở lại được một lần nữa.')) return;
+  try {
+    const r = await api('/photo-views/reset', { method: 'POST' });
+    toast(`Đã đặt lại ${r.cleared} lượt xem`);
+    loadOverview();
+  } catch (err) { if (err.message !== 'unauthorized') toast('Lỗi: ' + err.message); }
+});
 
 function setBadge(n) { const b = $('#reportBadge'); b.hidden = !n; b.textContent = n; }
 

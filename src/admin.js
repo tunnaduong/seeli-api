@@ -101,6 +101,7 @@ export default async function adminRoutes(app) {
         reunited: count('SELECT count(*) c FROM moments WHERE reunited_at IS NOT NULL'),
         friendships: count('SELECT count(*) c FROM friendships') / 2,
         perspectives: count('SELECT count(*) c FROM comments'),
+        photoViews: count('SELECT count(*) c FROM photo_views'),
         openReports: count("SELECT count(*) c FROM reports WHERE status = 'open'"),
         photoFiles,
         photoBytes,
@@ -146,6 +147,13 @@ export default async function adminRoutes(app) {
         suspend ? Date.now() : null, suspend ? 1 : 0, u.id);
       log(req, suspend ? 'suspend' : 'unsuspend', `@${u.handle}`);
       return { ok: true };
+    });
+
+    /** Lets every friend open every Let's Connect photo once more (clears who-viewed-what). */
+    adm.post('/photo-views/reset', async (req) => {
+      const { changes } = run('DELETE FROM photo_views');
+      log(req, 'reset_views', `${changes} lượt`);
+      return { ok: true, cleared: changes };
     });
 
     adm.post('/users/:id/signout', async (req, reply) => {
