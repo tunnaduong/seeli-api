@@ -19,7 +19,9 @@
     "MAX_PHOTO_MB": "8",
     "APPLE_AUDIENCES": "com.tunnaduong.seeli",
     "APPLE_TEAM_ID": "62H5L8QDTS",
-    "PUSH_RELAY_URL": "https://push.seeli.cam"
+    "PUSH_RELAY_URL": "https://push.seeli.cam",
+    "NEW_USER_NOTIFY_EMAIL": "tunnaduong@gmail.com",
+    "NOTIFY_FROM_EMAIL": "noreply@seeli.cam"
   },
   // Secrets (wrangler secret put): JWT_SECRET, ADMIN_PASSWORD, APPLE_KEY_ID, APPLE_KEY,
   // GOOGLE_CLIENT_IDS, FCM_SERVICE_ACCOUNT, PUSH_RELAY_SECRET.
@@ -28,5 +30,9 @@
   ],
   "r2_buckets": [
     { "binding": "PHOTOS", "bucket_name": "seeli-photos" }
+  ],
+  // Outbound mail for the new-user alert. Only the owner's address is allowed as a recipient.
+  "send_email": [
+    { "name": "EMAIL", "allowed_destination_addresses": ["tunnaduong@gmail.com"] }
   ]
 }

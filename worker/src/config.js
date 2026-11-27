@@ -3,13 +3,14 @@
  * `config` is filled from `env` on each request; the same names as the old Node .env.
  */
 export const config = {};
-export const bindings = { DB: null, PHOTOS: null, ctx: null };
+export const bindings = { DB: null, PHOTOS: null, EMAIL: null, ctx: null };
 
 const list = (s, fallback = '') => String(s ?? fallback).split(',').map((x) => x.trim()).filter(Boolean);
 
 export function loadEnv(env, ctx) {
   bindings.DB = env.DB;
   bindings.PHOTOS = env.PHOTOS;
+  bindings.EMAIL = env.EMAIL;
   bindings.ctx = ctx;
   Object.assign(config, {
     secret: env.JWT_SECRET || 'dev-only-secret-change-me',
@@ -33,6 +34,10 @@ export function loadEnv(env, ctx) {
     adminPassword: env.ADMIN_PASSWORD || '',
     adminSessionHours: 12,
     publicUrl: (env.PUBLIC_URL || '').replace(/\/$/, ''),
+    // Email alert to the owner when someone creates an account (empty = off).
+    newUserNotifyTo: (env.NEW_USER_NOTIFY_EMAIL || '').trim(),
+    // Sender for that alert; the domain must be onboarded in Cloudflare Email Sending.
+    notifyFrom: (env.NOTIFY_FROM_EMAIL || 'noreply@seeli.cam').trim(),
   });
 }
 

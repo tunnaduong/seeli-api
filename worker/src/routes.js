@@ -9,6 +9,7 @@ import { me, publicUser, myMoment, feedMoment, iso } from './serialize.js';
 import { verifyIdToken, TokenError } from './oidc.js';
 import { appleConfigured, exchangeCode, revokeToken } from './apple.js';
 import { pushToUsers } from './push.js';
+import { notifyNewUser } from './notify.js';
 
 /** Profile JSON including which sign-in providers are linked. */
 const meOf = async (u) =>
@@ -228,6 +229,7 @@ api.post('/auth/signup', async (c) => {
     bio: '', invite_code: await uniqueInviteCode(), token_version: 0, created_at: Date.now(),
   };
   await insertUser(user);
+  notifyNewUser(user, 'email');
   return c.json({ token: issueToken(user), user: await meOf(user) }, 201);
 });
 
@@ -278,6 +280,7 @@ api.post('/auth/:provider{apple|google}', async (c) => {
       bio: '', invite_code: await uniqueInviteCode(), token_version: 0, created_at: Date.now(),
     };
     await insertUser(user);
+    notifyNewUser(user, provider);
     isNew = true;
   }
   if (!linked) {
