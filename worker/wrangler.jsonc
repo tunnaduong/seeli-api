@@ -29,8 +29,11 @@
     { "binding": "DB", "database_name": "seeli", "database_id": "66369c06-4156-46bb-9632-146e9bde4410" }
   ],
   "r2_buckets": [
-    { "binding": "PHOTOS", "bucket_name": "seeli-photos" }
+    { "binding": "PHOTOS", "bucket_name": "seeli-photos" },
+    { "binding": "BACKUP", "bucket_name": "seeli-backups" }
   ],
+  // 19:00 UTC = 02:00 in Vietnam (UTC+7). See src/backup.js.
+  "triggers": { "crons": ["0 19 * * *"] },
   // Outbound mail for the new-user alert. Only the owner's address is allowed as a recipient.
   "send_email": [
     { "name": "EMAIL", "allowed_destination_addresses": ["tunnaduong@gmail.com"] }

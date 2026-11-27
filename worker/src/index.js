@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { loadEnv } from './config.js';
 import { api } from './routes.js';
 import { admin } from './admin.js';
+import { runBackup } from './backup.js';
 
 const app = new Hono();
 app.route('/', admin);
@@ -16,5 +17,10 @@ export default {
   fetch(request, env, ctx) {
     loadEnv(env, ctx);
     return app.fetch(request, env, ctx);
+  },
+  // Cron trigger (wrangler.jsonc): 02:00 Vietnam time every day.
+  async scheduled(event, env, ctx) {
+    loadEnv(env, ctx);
+    await runBackup(env);
   },
 };
